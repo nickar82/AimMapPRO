@@ -1,0 +1,1349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0e1012">
+<title>AimMap</title>
+<style>
+/* Layout: camera pane + map pane in one window (stacked in portrait, side by side in landscape),
+   a draggable splitter between them, and a bottom navigation (View / Map / Info / Settings). */
+:root{
+  --bg:#0e1012; --card:#171a1d; --card2:#1f2428; --line:rgba(255,255,255,.08);
+  --fg:#f1f3f4; --dim:#8f999f; --accent:#ffc815; --accent-ink:#171200; --accent-text:var(--accent);
+  --nav:#101316; --glass:rgba(16,19,22,.84); --mapbg:#20262a;
+  --ok:#46d39a; --err:#ff6b6b; --wait:#ffc815;
+  --ov:rgba(18,22,26,.74); --ovfg:#fff;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+:root[data-theme="light"]{
+  --bg:#f2f3f4; --card:#ffffff; --card2:#eef0f1; --line:rgba(0,0,0,.09);
+  --fg:#14181b; --dim:#5d686f; --accent-text:color-mix(in srgb,var(--accent) 62%,#000);
+  --nav:#ffffff; --glass:rgba(255,255,255,.92); --mapbg:#dfe5e8;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.35 var(--sans);overflow:hidden;overscroll-behavior:none;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ic{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+#app{position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+#stage{position:relative;flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#stage.swapped{flex-direction:column-reverse}
+.pane{position:relative;min-height:0;min-width:0;overflow:hidden;background:#000;flex:1 1 0}
+#app[data-mode="map"] #camPane,#app[data-mode="map"] #splitter{display:none}
+#app[data-mode="map"] #mapPane{flex:1 1 0!important}
+
+/* camera */
+#video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+#camPane{touch-action:none}
+#noCam{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:#8f999f;background:repeating-linear-gradient(135deg,#0b0d0f 0 12px,#101315 12px 24px)}
+#cross{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;pointer-events:none;color:var(--accent)}
+#cross:before,#cross:after{content:"";position:absolute;background:currentColor;box-shadow:0 0 2px rgba(0,0,0,.5)}
+#cross:before{left:27px;top:0;width:2px;height:20px;box-shadow:0 36px 0 currentColor}
+#cross:after{top:27px;left:0;height:2px;width:20px;box-shadow:36px 0 0 currentColor}
+#infoPill{position:absolute;top:12px;left:50%;transform:translateX(-50%);max-width:calc(100% - 20px);display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 16px;border-radius:16px;background:var(--ov);color:var(--ovfg);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);white-space:nowrap;font-size:16px;z-index:3}
+#infoPill .it{display:flex;align-items:center;gap:8px}
+#infoPill .ic{color:var(--accent);width:22px;height:22px}
+.ovbtn{width:48px;height:48px;border-radius:50%;border:1px solid rgba(255,255,255,.1);background:var(--ov);color:var(--ovfg);display:grid;place-items:center;padding:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.ovbtn:active{background:rgba(60,66,72,.9)}
+.ovbtn.on{background:var(--accent);color:var(--accent-ink)}
+.ovbtn .ic{width:23px;height:23px}
+#sideCol{position:absolute;right:12px;top:76px;display:flex;flex-direction:column;gap:12px;z-index:3}
+#zoomChip{position:absolute;right:12px;bottom:14px;min-width:50px;height:50px;border-radius:25px;padding:0 12px;font-weight:600;font-size:16px;z-index:3;border:1px solid rgba(255,255,255,.1);background:var(--ov);color:var(--ovfg)}
+#zoomPop{position:absolute;right:72px;bottom:14px;height:50px;width:min(58%,300px);border-radius:25px;background:var(--ov);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;padding:0 16px;z-index:3}
+#headRow{position:absolute;left:12px;bottom:14px;right:140px;height:50px;border-radius:25px;background:var(--ov);color:var(--ovfg);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:10px;padding:0 14px;z-index:3;font-size:13px}
+#headRow output{font:600 13px var(--mono);min-width:38px;text-align:right}
+input[type=range]{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--accent);background:transparent}
+
+/* splitter */
+#splitter{flex:none;height:16px;display:grid;place-items:center;background:var(--bg);touch-action:none;cursor:row-resize;z-index:4}
+#splitter:before{content:"";width:44px;height:5px;border-radius:3px;background:var(--dim);opacity:.6}
+
+/* map */
+#mapPane{background:var(--mapbg);touch-action:none}
+#mapCv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.mbtn{width:48px;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--glass);color:var(--fg);display:grid;place-items:center;padding:0;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.mbtn:active{background:var(--card2)}
+.mbtn.on{color:var(--accent-text)}
+#mapTop{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:12px;z-index:3}
+#mapBot{position:absolute;right:12px;bottom:22px;display:flex;flex-direction:column;z-index:3;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:var(--glass)}
+#mapBot .mbtn{border-radius:0;border:0;box-shadow:none;background:transparent}
+#mapBot .mbtn+.mbtn{border-top:1px solid var(--line)}
+#scale{position:absolute;left:12px;bottom:26px;z-index:3;color:#1a1d20;font:600 12px var(--sans);display:flex;align-items:flex-end;gap:6px;text-shadow:0 0 3px #fff,0 0 3px #fff}
+#scaleBar{height:7px;border:2px solid #1a1d20;border-top:0;background:transparent;box-shadow:0 0 0 1px rgba(255,255,255,.6)}
+#attr{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:2px 8px;font-size:11px;color:#333;background:rgba(255,255,255,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#gpsWait{position:absolute;left:12px;top:12px;z-index:3;padding:8px 12px;border-radius:12px;background:var(--glass);border:1px solid var(--line);font-size:13px;max-width:calc(100% - 88px)}
+
+/* info panel */
+#infoPanel{position:absolute;inset:0;z-index:20;background:var(--bg);overflow-y:auto;padding:14px 14px 20px;-webkit-overflow-scrolling:touch;user-select:text;-webkit-user-select:text}
+.card{background:var(--card);border-radius:16px;padding:6px 16px;margin-bottom:12px}
+.card h3{margin:0;padding:12px 0 6px;font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--accent-text);font-weight:700}
+.kv{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line);min-height:46px}
+.card h3+.kv{border-top:0}
+.kv span:first-child{color:var(--dim)}
+.kv b{font:600 14px var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:var(--dim)}
+.dot[data-s=ok]{background:var(--ok)} .dot[data-s=err]{background:var(--err)} .dot[data-s=wait]{background:var(--wait)}
+.how{margin:0;padding:6px 0 14px;color:var(--dim);font-size:14px;line-height:1.5}
+.how p{margin:0 0 8px}
+.btnwide{width:100%;border:1px solid var(--line);background:var(--card2);color:var(--fg);padding:13px;border-radius:12px;margin:4px 0 12px;font-weight:600}
+.btnwide.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+
+/* bottom nav */
+#nav{flex:none;display:flex;background:var(--nav);border-top:1px solid var(--line);padding:6px 4px 8px;z-index:30}
+#nav button{flex:1;border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;color:var(--dim);font-size:13px}
+#nav button.active{color:var(--accent-text)}
+#nav .ic{width:27px;height:27px}
+
+/* settings overlay */
+#settings{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
+#setHead{flex:none;display:flex;align-items:center;gap:14px;padding:14px 18px}
+#setHead img{width:64px;height:64px;border-radius:50%;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+#setHead h1{flex:1;margin:0;font-size:34px;letter-spacing:-.02em;color:var(--accent-text);font-weight:800}
+#setHead .x{width:44px;height:44px;border:0;background:transparent;display:grid;place-items:center;padding:0;color:var(--fg)}
+#setBody{flex:1;overflow-y:auto;padding:4px 14px 24px;-webkit-overflow-scrolling:touch}
+.sec{background:var(--card);border-radius:18px;margin-bottom:14px;overflow:hidden}
+.sec>h2{margin:0;display:flex;align-items:center;gap:10px;padding:14px 16px 12px;font-size:19px;color:var(--accent-text);font-weight:700}
+.sec>h2 .ic{width:25px;height:25px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:52px;padding:0 16px;border:0;border-top:1px solid var(--line);background:transparent;text-align:left;font-size:16px}
+.row .val{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:15px;min-width:0;text-align:right}
+.row .val .ic{width:18px;height:18px}
+.sw{position:relative;width:54px;height:32px;border-radius:16px;background:#4a5258;border:0;padding:0;flex:none;transition:background .15s}
+.sw:after{content:"";position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .15s}
+.sw[aria-checked=true]{background:var(--accent)}
+.sw[aria-checked=true]:after{transform:translateX(22px);background:var(--accent-ink)}
+.swatch{width:30px;height:30px;border-radius:50%;background:var(--accent);border:2px solid rgba(255,255,255,.35)}
+.about{padding:6px 16px 16px;border-top:1px solid var(--line);color:var(--fg);font-size:16px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.about small{display:block;color:var(--dim);font-size:13px}
+.about b{color:var(--accent-text);font-weight:600}
+
+/* sheets */
+#sheetBg{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
+#sheet{width:100%;max-width:520px;background:var(--card);border-radius:20px 20px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:6px;max-height:80%;overflow-y:auto}
+#sheet h4{margin:0 0 6px;font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.opt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:50px;padding:0 6px;border:0;border-top:1px solid var(--line);background:transparent;text-align:left;font-size:16px;width:100%}
+.opt .ic{color:var(--accent-text)}
+.swgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:10px 0}
+.swgrid button{aspect-ratio:1;border-radius:50%;border:3px solid transparent;padding:0}
+.swgrid button.sel{border-color:var(--fg)}
+.numed{display:flex;align-items:center;gap:10px;padding:10px 0}
+.numed button{width:52px;height:52px;border-radius:14px;border:1px solid var(--line);background:var(--card2);font-size:24px;line-height:1}
+.numed input{flex:1;min-width:0;height:52px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:600 22px var(--mono);text-align:center;user-select:text}
+.numhint{color:var(--dim);font-size:13px;margin:0 0 4px}
+.donebtn{margin-top:8px;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);padding:14px;font-weight:700;font-size:16px}
+
+/* splash, gate, toast */
+#splash{position:fixed;inset:0;z-index:1000;background:#000;transition:opacity .35s}
+#splash img{width:100%;height:100%;object-fit:cover;object-position:50% 40%;display:block}
+#splash.out{opacity:0;pointer-events:none}
+#gate{position:fixed;inset:0;z-index:900;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
+#gate .g{max-width:340px;display:flex;flex-direction:column;gap:14px;align-items:center;text-align:center}
+#gate img{width:96px;height:96px;border-radius:50%}
+#gate p{margin:0;color:var(--dim)}
+#gate button{border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);padding:14px 32px;font-weight:700;font-size:17px}
+#toast{position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:500;background:#2a3238;color:#fff;border:1px solid rgba(255,255,255,.12);padding:10px 16px;border-radius:12px;font-size:14px;max-width:90vw;text-align:center}
+[hidden]{display:none!important}
+
+/* Free / Pro */
+.ovbtn{position:relative}
+.lk{position:absolute;right:-3px;top:-3px;width:19px;height:19px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;pointer-events:none}
+.lk .ic{width:11px;height:11px;stroke-width:2.8}
+.pro .lk{display:none}
+#toolCol{position:absolute;left:12px;top:76px;display:flex;flex-direction:column;gap:12px;z-index:3}
+#lockBar{position:absolute;left:72px;right:72px;top:76px;height:46px;border-radius:23px;background:var(--ov);color:var(--ovfg);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;gap:8px;padding:0 12px;z-index:3;font:600 13px var(--sans);cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#lockBar .ic{width:17px;height:17px;color:var(--accent)}
+#lockBar .trk{position:relative;flex:1;min-width:30px;height:6px;border-radius:3px;background:rgba(255,255,255,.25)}
+#lockBar .trk:before{content:"";position:absolute;left:50%;top:-4px;width:2px;height:14px;margin-left:-1px;background:rgba(255,255,255,.75)}
+#lkMark{position:absolute;top:-5px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:var(--accent);border:2px solid #fff}
+#lockBar.ok{border-color:var(--ok)}
+#lockBar.ok #lkMark{background:var(--ok)}
+#lkDev{min-width:62px;text-align:right;font-variant-numeric:tabular-nums}
+.probadge{display:inline-block;background:#ffc815;color:#171200;font:800 13px var(--sans);padding:3px 9px;border-radius:8px;letter-spacing:.04em;vertical-align:middle}
+#setHead h1 .probadge{margin-left:10px;font-size:12px}
+
+/* Pro screen (always dark) */
+#pro{position:fixed;inset:0;z-index:400;background:#0b0d0f;color:#f1f3f4;display:flex;flex-direction:column;overflow:hidden}
+#proScroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 8px env(safe-area-inset-left,0px)}
+.proHero{position:relative;padding:18px 18px 14px;min-height:240px;overflow:hidden}
+.proPhoto{position:absolute;right:0;top:0;height:100%;width:60%;object-fit:cover;object-position:60% 30%;-webkit-mask-image:linear-gradient(to right,transparent 0,#000 55%);mask-image:linear-gradient(to right,transparent 0,#000 55%);opacity:.9}
+.proHero:after{content:"";position:absolute;inset:0;background:linear-gradient(to bottom,rgba(11,13,15,0) 40%,#0b0d0f 100%)}
+.proHero>*:not(.proPhoto){position:relative;z-index:1}
+#proClose{position:absolute;right:14px;top:calc(14px + env(safe-area-inset-top,0px));width:44px;height:44px;border-radius:50%;border:0;background:rgba(30,32,35,.85);color:#fff;display:grid;place-items:center;padding:0;z-index:3}
+.proBrand{display:flex;align-items:center;gap:12px;padding-right:56px}
+.proBrand img{width:58px;height:58px;border-radius:50%;flex:none}
+.proBrand h1{margin:0;font-size:30px;font-weight:800;letter-spacing:-.02em;color:#ffc815;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.proBrand p{margin:2px 0 0;color:#c4cbd0;font-size:14px}
+.proHero h2{margin:20px 0 6px;font-size:34px;line-height:1.05;font-weight:800;letter-spacing:-.02em;color:#fff}
+.proHero .sub{margin:0;color:#c4cbd0;max-width:290px;font-size:15px}
+.proList{margin:0 14px;background:#14171a;border:1px solid rgba(255,255,255,.08);border-radius:18px;overflow:hidden}
+.proRow{display:flex;align-items:center;gap:14px;padding:12px 14px;border-top:1px solid rgba(255,255,255,.07)}
+.proRow:first-child{border-top:0}
+.proRow .pi{width:50px;height:50px;border-radius:14px;background:#21190a;color:#ffc815;display:grid;place-items:center;flex:none}
+.proRow .pi .ic{width:27px;height:27px}
+.proRow .pt{flex:1;min-width:0}
+.proRow b{display:block;font-size:17px}
+.proRow small{display:block;color:#a6afb5;font-size:14px;line-height:1.3}
+.proRow .ch{color:#7c868c;flex:none;width:20px;height:20px}
+.proFoot{flex:none;padding:12px calc(14px + env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) calc(14px + env(safe-area-inset-left,0px));background:#0b0d0f;border-top:1px solid rgba(255,255,255,.06)}
+#proBuy{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;border-radius:18px;padding:12px 22px;background:linear-gradient(180deg,#ffd43b,#ffbb00);color:#171200;text-align:left}
+#proBuy>span:first-child{font-size:19px;font-weight:800}
+#proBuy .pp{display:flex;flex-direction:column;align-items:center;border-left:1px solid rgba(0,0,0,.25);padding-left:18px;flex:none}
+#proBuy .pp b{font-size:24px;font-weight:800;line-height:1.1}
+#proBuy .pp small{font-size:13px;opacity:.85}
+#proBuy:disabled{opacity:.6}
+.proFoot p{margin:8px 0 0;text-align:center;color:#8f999f;font-size:13px}
+
+/* saved locations */
+#locs{position:fixed;inset:0;z-index:150;background:var(--bg);display:flex;flex-direction:column;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+#locsHead{flex:none;display:flex;align-items:center;gap:8px;padding:12px 14px}
+#locsHead h1{flex:1;margin:0;font-size:24px;color:var(--accent-text);font-weight:800;min-width:0}
+.hbtn{height:42px;min-width:42px;padding:0 12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--fg);display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:14px}
+.hbtn .ic{width:20px;height:20px}
+#locsBody{flex:1;overflow-y:auto;padding:4px 14px 20px;-webkit-overflow-scrolling:touch}
+.loc{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;background:var(--card);border:0;border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.loc b{font-size:16px}
+.loc span{color:var(--dim);font:13px var(--mono)}
+.loc em{font-style:normal;font-size:14px;margin-top:2px}
+.loc small{color:var(--dim);font-size:12px}
+.empty{text-align:center;color:var(--dim);padding:48px 24px}
+.empty .ic{width:44px;height:44px;color:var(--accent-text)}
+.fld{display:flex;flex-direction:column;gap:4px;margin:4px 0}
+.fld label{font-size:12px;color:var(--dim)}
+.fld input,.fld textarea{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px;font:16px var(--sans);user-select:text;-webkit-user-select:text;resize:none;width:100%}
+.btnrow{display:flex;gap:10px;margin-top:6px}
+.sbtn{flex:1;border:1px solid var(--line);background:var(--card2);color:var(--fg);border-radius:12px;padding:13px;font-weight:600}
+.sbtn.danger{color:var(--err)}
+.shotimg{width:100%;border-radius:12px;display:block;max-height:46vh;object-fit:contain;background:#000}
+.swgrid button{position:relative}
+.swgrid .auto{position:absolute;inset:0;display:grid;place-items:center;font-weight:800;color:var(--accent-ink);font-size:14px}
+.promo{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#2a2108,#16130a);border:1px solid rgba(255,200,21,.35);border-radius:18px;padding:14px;margin-bottom:14px;color:#f1f3f4}
+.promo .pc{width:46px;height:46px;border-radius:13px;background:rgba(255,200,21,.14);color:#ffc815;display:grid;place-items:center;flex:none}
+.promo .pt{flex:1;min-width:0}
+.promo b{display:block;font-size:16px}
+.promo span{display:block;font-size:13px;color:#b6bec3;line-height:1.3}
+.pbuy{border:0;border-radius:12px;background:#ffc815;color:#171200;font-weight:800;padding:11px 14px;flex:none}
+.prorow{padding:8px 16px;min-height:62px}
+.prorow .pi{width:38px;height:38px;border-radius:11px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent-text);display:grid;place-items:center;flex:none}
+.prorow .pi .ic{width:21px;height:21px}
+.prorow .pl{display:flex;flex-direction:column;flex:1;min-width:0}
+.prorow .pl small{color:var(--dim);font-size:12.5px;line-height:1.25}
+
+/* landscape: panes side by side, nav on the right as a rail */
+@media (orientation:landscape){
+  #app{flex-direction:row}
+  #stage{flex-direction:row}
+  #stage.swapped{flex-direction:row-reverse}
+  #splitter{width:16px;height:auto;cursor:col-resize}
+  #splitter:before{width:5px;height:44px}
+  #nav{flex-direction:column;border-top:0;border-left:1px solid var(--line);padding:4px 0;width:78px;justify-content:space-around}
+  #nav button{flex:1;font-size:12px}
+  #infoPill{gap:9px;padding:8px 12px;font-size:13px;top:8px}
+  #infoPill .ic{width:17px;height:17px}
+  #sideCol{top:58px;right:8px;gap:8px}
+  .ovbtn{width:42px;height:42px}
+  #zoomChip{height:42px;bottom:10px;right:8px}
+  #zoomPop{height:42px;bottom:10px;right:60px}
+  #headRow{height:42px;bottom:10px;left:8px;right:116px}
+  #mapTop{top:8px;right:8px;gap:8px}
+  .mbtn{width:42px;height:42px}
+  #mapBot{bottom:20px;right:8px}
+  #scale{left:8px;bottom:24px}
+  #setHead h1{font-size:28px}
+  #setHead img{width:48px;height:48px}
+  #splash img{object-fit:contain}
+}
+@media (orientation:landscape){
+  #toolCol{left:8px;top:58px;gap:8px}
+  #lockBar{left:58px;right:58px;top:58px;height:40px;font-size:12px}
+  .proHero{min-height:200px}
+  .proHero h2{font-size:28px}
+  #proBuy{padding:6px 20px;border-radius:16px}
+  #proBuy>span:first-child{font-size:17px}
+  #proBuy .pp b{font-size:19px}
+  #proBuy .pp small{font-size:11px}
+  .proFoot{padding-top:8px;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px))}
+  .proFoot p{display:none}
+}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-view" viewBox="0 0 24 24"><path d="M12 3l7.5 17.5L12 16.5 4.5 20.5z"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6.5v14L9 18l6 2.5 6-2.5v-14L15 6.5zM9 4v14M15 6.5v14"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6h.01"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-flash" viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11L10 22l9-12h-6.5z"/></symbol>
+  <symbol id="i-flip" viewBox="0 0 24 24"><path d="M4 8.5h3l1.6-2h6.8l1.6 2h3V19H4z"/><path d="M9.3 13.6a2.9 2.9 0 0 1 5-1.4M14.7 14.4a2.9 2.9 0 0 1-5 1.4M14.6 10.9v1.5h-1.5M9.4 17.1v-1.5h1.5"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4v15M7 19l-3.2-3.2M7 19l3.2-3.2M17 20V5M17 5l-3.2 3.2M17 5l3.2 3.2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3.5l9 5-9 5-9-5zM3 12.5l9 5 9-5M3 16.5l9 5 9-5"/></symbol>
+  <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 6.5l4 10-4-2.2-4 2.2z" fill="currentColor"/></symbol>
+  <symbol id="i-fov" viewBox="0 0 24 24"><path d="M2.5 6c6.2 3.2 12.8 3.2 19 0L12 20z" fill="currentColor" fill-opacity=".25"/></symbol>
+  <symbol id="i-tilt" viewBox="0 0 24 24"><path d="M3 12h5.5M15.5 12H21M12 4.5v4M12 15.5v4"/><circle cx="12" cy="12" r="1.2"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5.5l6.5 6.5L9 18.5"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3.5 8h3.7l1.8-2.5h6L16.8 8h3.7v11.5h-17z"/><circle cx="12" cy="13.5" r="3.6"/></symbol>
+  <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M3.5 16.5L16.5 3.5l4 4-13 13z"/><path d="M7.5 12.5l2 2M10.5 9.5l2 2M13.5 6.5l2 2"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.6 0 2.2-1.1 1.6-2.1-.6-1 0-2.2 1.4-2.2H17a4 4 0 0 0 4-4C21 7 17 3 12 3z"/><path d="M7.5 11h.01M10 7.5h.01M14.5 7.5h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M5 14v5h14v-5"/></symbol>
+  <symbol id="i-noad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8M8 15l1.8-5.5L11.6 15M8.6 13.4h2.4M13.4 10v5h1.3a2.5 2.5 0 0 0 0-5z"/></symbol>
+  <symbol id="i-crown" viewBox="0 0 24 24"><path d="M3.5 8l4.5 4 4-6 4 6 4.5-4-1.5 10h-14z"/></symbol>
+</svg>
+
+<div id="app" data-mode="view">
+  <div id="stage">
+    <section class="pane" id="camPane" aria-label="Camera">
+      <video id="video" playsinline muted autoplay></video>
+      <div id="noCam">Camera is off</div>
+      <div id="cross" aria-hidden="true"></div>
+      <div id="infoPill">
+        <span class="it"><svg class="ic"><use href="#i-compass"/></svg><span id="pHead">--°</span></span>
+        <span class="it"><svg class="ic"><use href="#i-fov"/></svg><span id="pFov">FOV --°</span></span>
+        <span class="it"><svg class="ic"><use href="#i-tilt"/></svg><span id="pTilt">Tilt --°</span></span>
+      </div>
+      <div id="sideCol">
+        <button class="ovbtn" id="btnFlash" aria-label="Flashlight"><svg class="ic"><use href="#i-flash"/></svg></button>
+        <button class="ovbtn" id="btnFlip" aria-label="Switch camera"><svg class="ic"><use href="#i-flip"/></svg></button>
+        <button class="ovbtn" id="btnSwap" aria-label="Swap camera and map"><svg class="ic"><use href="#i-swap"/></svg></button>
+      </div>
+      <div id="toolCol">
+        <button class="ovbtn" id="btnSave" aria-label="Save location"><svg class="ic"><use href="#i-pin"/></svg><i class="lk"><svg class="ic"><use href="#i-lock"/></svg></i></button>
+        <button class="ovbtn" id="btnLock" aria-label="Direction lock"><svg class="ic"><use href="#i-locate"/></svg><i class="lk"><svg class="ic"><use href="#i-lock"/></svg></i></button>
+        <button class="ovbtn" id="btnShot" aria-label="Geo screenshot"><svg class="ic"><use href="#i-camera"/></svg><i class="lk"><svg class="ic"><use href="#i-lock"/></svg></i></button>
+      </div>
+      <div id="lockBar" hidden role="button" aria-label="Direction lock"><svg class="ic"><use href="#i-lock"/></svg><span id="lkTxt">--</span><div class="trk"><i id="lkMark" style="left:50%"></i></div><span id="lkDev"></span></div>
+      <div id="headRow" hidden>
+        <label for="headIn">Heading</label>
+        <input id="headIn" type="range" min="0" max="359" step="1" value="0">
+        <output id="headOut">0°</output>
+      </div>
+      <div id="zoomPop" hidden><input id="zoomIn" type="range" min="1" max="10" step="0.1" value="1" aria-label="Zoom"></div>
+      <button id="zoomChip" aria-label="Zoom">1x</button>
+    </section>
+
+    <div id="splitter" role="separator" aria-label="Resize camera and map"></div>
+
+    <section class="pane" id="mapPane" aria-label="Map">
+      <canvas id="mapCv"></canvas>
+      <div id="gpsWait" hidden>Waiting for GPS…</div>
+      <div id="mapTop">
+        <button class="mbtn" id="btnLayers" aria-label="Map type"><svg class="ic"><use href="#i-layers"/></svg></button>
+        <button class="mbtn" id="btnLocate" aria-label="Center on my position"><svg class="ic"><use href="#i-locate"/></svg></button>
+      </div>
+      <div id="mapBot">
+        <button class="mbtn" id="btnZin" aria-label="Zoom in"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <button class="mbtn" id="btnZout" aria-label="Zoom out"><svg class="ic"><use href="#i-minus"/></svg></button>
+      </div>
+      <div id="scale"><span id="scaleLbl"></span><div id="scaleBar"></div></div>
+      <div id="attr"></div>
+    </section>
+
+    <section id="infoPanel" hidden aria-label="Info"></section>
+  </div>
+
+  <nav id="nav" aria-label="Main">
+    <button data-mode="view" class="active"><svg class="ic"><use href="#i-view"/></svg>View</button>
+    <button data-mode="map"><svg class="ic"><use href="#i-map"/></svg>Map</button>
+    <button data-mode="info"><svg class="ic"><use href="#i-info"/></svg>Info</button>
+    <button data-mode="settings"><svg class="ic"><use href="#i-gear"/></svg>Settings</button>
+  </nav>
+</div>
+
+<div id="settings" hidden>
+  <div id="setHead">
+    <img src="img/logo.png" alt="">
+    <h1>AimMap<span id="proBadge" class="probadge" hidden>PRO</span></h1>
+    <button class="x" id="setClose" aria-label="Close settings"><svg class="ic"><use href="#i-close"/></svg></button>
+  </div>
+  <div id="setBody"></div>
+</div>
+
+<div id="sheetBg" hidden><div id="sheet" role="dialog"></div></div>
+
+<div id="gate" hidden>
+  <div class="g">
+    <img src="img/logo.png" alt="">
+    <p>AimMap needs the camera, your location and the motion sensors to show where the camera is pointing.</p>
+    <p>You are asked only once. After that AimMap opens straight away.</p>
+    <button id="gateBtn">Continue</button>
+  </div>
+</div>
+
+<div id="locs" hidden>
+  <div id="locsHead">
+    <h1>Saved locations</h1>
+    <button class="hbtn" id="locsAdd" aria-label="Save current location"><svg class="ic"><use href="#i-plus"/></svg></button>
+    <button class="hbtn" id="locsExport" aria-label="Export and import"><svg class="ic"><use href="#i-upload"/></svg></button>
+    <button class="hbtn" id="locsClose" aria-label="Close"><svg class="ic"><use href="#i-close"/></svg></button>
+  </div>
+  <div id="locsBody"></div>
+</div>
+<input id="impFile" type="file" accept=".gpx,.csv,.xml,text/csv,text/plain,application/gpx+xml,text/xml" hidden>
+
+<div id="pro" hidden role="dialog" aria-label="AimMap Pro">
+  <div id="proScroll">
+    <div class="proHero">
+      <img class="proPhoto" src="img/pro-hero.jpg" alt="">
+      <button id="proClose" aria-label="Close"><svg class="ic"><use href="#i-close"/></svg></button>
+      <div class="proBrand"><img src="img/logo.png" alt=""><div><h1>AimMap <span class="probadge">PRO</span></h1><p>See more. Explore further.</p></div></div>
+      <h2>Upgrade to<br>AimMap Pro</h2>
+      <p class="sub">Unlock powerful tools and get the most out of your exploration.</p>
+    </div>
+    <div class="proList">
+      <div class="proRow"><span class="pi"><svg class="ic"><use href="#i-noad"/></svg></span><div class="pt"><b>Ad-free experience</b><small>Enjoy the app without any ads.</small></div><svg class="ic ch"><use href="#i-chev"/></svg></div>
+      <div class="proRow"><span class="pi"><svg class="ic"><use href="#i-pin"/></svg></span><div class="pt"><b>Save locations</b><small>Store your favorite spots with direction, elevation and notes.</small></div><svg class="ic ch"><use href="#i-chev"/></svg></div>
+      <div class="proRow"><span class="pi"><svg class="ic"><use href="#i-locate"/></svg></span><div class="pt"><b>Direction lock</b><small>Lock a specific bearing and see the deviation in real time.</small></div><svg class="ic ch"><use href="#i-chev"/></svg></div>
+      <div class="proRow"><span class="pi"><svg class="ic"><use href="#i-camera"/></svg></span><div class="pt"><b>Geo screenshots</b><small>Save photos with location, direction, angle and date.</small></div><svg class="ic ch"><use href="#i-chev"/></svg></div>
+      <div class="proRow"><span class="pi"><svg class="ic"><use href="#i-sliders"/></svg></span><div class="pt"><b>Advanced view options</b><small>Customize the FOV cone color and opacity.</small></div><svg class="ic ch"><use href="#i-chev"/></svg></div>
+      <div class="proRow"><span class="pi"><svg class="ic"><use href="#i-upload"/></svg></span><div class="pt"><b>Export &amp; import</b><small>Backup and share your saved locations (e.g. GPX or CSV).</small></div><svg class="ic ch"><use href="#i-chev"/></svg></div>
+    </div>
+  </div>
+  <div class="proFoot">
+    <button id="proBuy"><span>Unlock AimMap Pro</span><span class="pp"><b id="proPrice">€1.49</b><small>one-time payment</small></span></button>
+    <p>A one-time purchase. No subscriptions. Use it forever.</p>
+  </div>
+</div>
+
+<div id="splash"><img src="img/splash.jpg" alt="AimMap"></div>
+<div id="toast" hidden></div>
+
+<script src="native.js"></script>
+<script>
+// <core>
+const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+
+// Direction the back camera points (device -Z axis) from alpha/beta/gamma.
+function cameraDirection(alpha, beta, gamma) {
+  const a = rad(alpha), b = rad(beta), g = rad(gamma);
+  const x = -Math.sin(g) * Math.cos(a) - Math.sin(a) * Math.sin(b) * Math.cos(g);
+  const y = -Math.sin(g) * Math.sin(a) + Math.cos(a) * Math.sin(b) * Math.cos(g);
+  const z = -Math.cos(b) * Math.cos(g);
+  return { heading: (deg(Math.atan2(x, y)) + 360) % 360, pitch: deg(Math.asin(Math.max(-1, Math.min(1, z)))), horiz: Math.hypot(x, y) };
+}
+// Horizontal FOV of what is visible in the pane (object-fit: cover) at a given zoom.
+function hFov(o) {
+  const tanLong = Math.tan(rad(o.baseFov) / 2);
+  const axis = o.vw >= o.vh ? 1 : o.vw / o.vh;
+  let frac = 1;
+  if (o.pw > 0 && o.ph > 0) {
+    const scale = Math.max(o.pw / o.vw, o.ph / o.vh);
+    frac = Math.min(1, (o.pw / scale) / o.vw);
+  }
+  return 2 * deg(Math.atan(tanLong * axis * frac / o.zoom));
+}
+function dest(lat, lng, brg, d) {
+  const R = 6371008.8, dl = d / R, t = rad(brg), p1 = rad(lat), l1 = rad(lng);
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(dl) + Math.cos(p1) * Math.sin(dl) * Math.cos(t));
+  const l2 = l1 + Math.atan2(Math.sin(t) * Math.sin(dl) * Math.cos(p1), Math.cos(dl) - Math.sin(p1) * Math.sin(p2));
+  return [deg(p2), deg(l2)];
+}
+// Web Mercator
+function proj(lat, lng, z) {
+  const s = 256 * Math.pow(2, z), sin = Math.sin(rad(Math.max(-85.05, Math.min(85.05, lat))));
+  return [(lng + 180) / 360 * s, (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * s];
+}
+function unproj(x, y, z) {
+  const s = 256 * Math.pow(2, z), n = Math.PI - 2 * Math.PI * y / s;
+  return [deg(Math.atan(Math.sinh(n))), x / s * 360 - 180];
+}
+const mPerPx = (lat, z) => 156543.03392 * Math.cos(rad(lat)) / Math.pow(2, z);
+
+// Round scale-bar length (meters) near a target, labelled in the chosen unit.
+function niceScale(maxMeters, unit) {
+  const steps = [1, 2, 5];
+  const u = unit === 'mi' ? (maxMeters > 804 ? 1609.344 : 0.3048) : (maxMeters >= 1000 ? 1000 : 1);
+  const v = maxMeters / u; let p = Math.pow(10, Math.floor(Math.log10(v))), best = p;
+  for (const s of steps) if (s * p <= v) best = s * p;
+  const label = unit === 'mi' ? (u > 1000 ? best + ' mi' : best + ' ft') : (u === 1000 ? best + ' km' : best + ' m');
+  return { meters: best * u, label };
+}
+const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const cardinal = h => CARD[Math.round(h / 45) % 8];
+function fmtAngle(a, mode) {
+  if (mode === 'dm') { const d = Math.floor(Math.abs(a)), m = Math.round((Math.abs(a) - d) * 60); return (a < 0 ? '-' : '') + (m === 60 ? d + 1 : d) + '°' + String(m === 60 ? 0 : m).padStart(2, '0') + '′'; }
+  return Math.round(a) + '°';
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const unesc = s => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&');
+const angDiff = (a, b) => ((a - b + 540) % 360) - 180;   // signed difference a - b in [-180, 180)
+const r1 = v => (v == null || !isFinite(v)) ? '' : String(Math.round(v * 10) / 10);
+const pad2 = n => String(n).padStart(2, '0');
+function fmtStamp(ts) { const d = new Date(ts); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()); }
+const stampName = ts => fmtStamp(ts).replace(/[-:]/g, '').replace(' ', '_');
+const num = v => { if (v == null || v === '') return null; const n = parseFloat(v); return isFinite(n) ? n : null; };
+let idSeq = 0;
+const newId = () => Date.now().toString(36) + (idSeq++).toString(36) + Math.random().toString(36).slice(2, 5);
+function mkLoc(o) {
+  const t = o.time ? Date.parse(o.time) : NaN;
+  return { id: newId(), name: String(o.name || 'Imported').slice(0, 60), notes: String(o.notes || '').slice(0, 400), lat: o.lat, lng: o.lng,
+           alt: o.alt == null ? null : o.alt, heading: o.heading == null ? null : o.heading, pitch: o.pitch == null ? 0 : o.pitch,
+           fov: o.fov == null ? null : o.fov, zoom: o.zoom == null ? 1 : o.zoom, ts: isFinite(t) ? t : Date.now() };
+}
+// ---- CSV ----
+const CSV_COLS = ['name', 'notes', 'lat', 'lng', 'alt', 'heading', 'tilt', 'fov', 'zoom', 'time'];
+const csvCell = v => { v = v == null ? '' : String(v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+function locsToCsv(list) {
+  const rows = list.map(l => [l.name, l.notes, l.lat, l.lng, l.alt, r1(l.heading), r1(l.pitch), l.fov, r1(l.zoom), new Date(l.ts).toISOString()].map(csvCell).join(','));
+  return [CSV_COLS.join(',')].concat(rows).join('\r\n') + '\r\n';
+}
+function parseCsv(text) {
+  const rows = []; let row = [], cell = '', q = false; text = String(text).replace(/^\uFEFF/, '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(x => x !== ''));
+}
+function csvToLocs(text) {
+  const rows = parseCsv(text); if (rows.length < 2) return [];
+  const h = rows[0].map(x => x.trim().toLowerCase()), ix = n => h.indexOf(n), out = [];
+  if (ix('lat') < 0 || ix('lng') < 0) return [];
+  for (const r of rows.slice(1)) {
+    const lat = num(r[ix('lat')]), lng = num(r[ix('lng')]);
+    if (lat == null || lng == null || Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+    const g = n => ix(n) < 0 ? undefined : r[ix(n)];
+    out.push(mkLoc({ name: g('name'), notes: g('notes'), lat, lng, alt: num(g('alt')), heading: num(g('heading')), pitch: num(g('tilt')), fov: num(g('fov')), zoom: num(g('zoom')), time: g('time') }));
+  }
+  return out;
+}
+// ---- GPX ----
+function locsToGpx(list) {
+  const w = list.map(l => '  <wpt lat="' + l.lat + '" lon="' + l.lng + '">\n' +
+    (l.alt != null ? '    <ele>' + l.alt + '</ele>\n' : '') +
+    '    <time>' + new Date(l.ts).toISOString() + '</time>\n' +
+    '    <name>' + esc(l.name) + '</name>\n' +
+    (l.notes ? '    <desc>' + esc(l.notes) + '</desc>\n' : '') +
+    '    <extensions>\n' +
+    (l.heading != null ? '      <aim:heading>' + r1(l.heading) + '</aim:heading>\n' : '') +
+    '      <aim:tilt>' + r1(l.pitch) + '</aim:tilt>\n' +
+    (l.fov != null ? '      <aim:fov>' + l.fov + '</aim:fov>\n' : '') +
+    '    </extensions>\n  </wpt>').join('\n');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="AimMap" xmlns="http://www.topografix.com/GPX/1/1" xmlns:aim="https://aimmap.app/gpx/1">\n' + w + '\n</gpx>\n';
+}
+function gpxToLocs(text) {
+  const out = [], re = /<wpt\b([^>]*)>([\s\S]*?)<\/wpt>/gi; let m;
+  while ((m = re.exec(text))) {
+    const at = n => { const r = new RegExp(n + '\\s*=\\s*["\']([^"\']+)["\']', 'i').exec(m[1]); return r ? parseFloat(r[1]) : NaN; };
+    const lat = at('lat'), lng = at('lon');
+    if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+    const tag = n => { const r = new RegExp('<(?:\\w+:)?' + n + '\\b[^>]*>([\\s\\S]*?)</(?:\\w+:)?' + n + '>', 'i').exec(m[2]); return r ? unesc(r[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim()) : null; };
+    out.push(mkLoc({ name: tag('name'), notes: tag('desc') || tag('cmt'), lat, lng, alt: num(tag('ele')), heading: num(tag('heading')), pitch: num(tag('tilt')), fov: num(tag('fov')), time: tag('time') }));
+  }
+  return out;
+}
+// </core>
+
+(() => {
+  const $ = id => document.getElementById(id);
+  const ic = n => '<svg class="ic"><use href="#i-' + n + '"/></svg>';
+  const DEF = { lat: 37.9715, lng: 23.7257 };
+  const ACCENTS = ['#ffc815', '#ff8a3d', '#33c6f4', '#46d39a', '#ff6fa8'];
+  const TILES = {
+    osm:  { name: 'OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attr: '© OpenStreetMap contributors', max: 19 },
+    sat:  { name: 'Satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr: 'Tiles © Esri', max: 19 },
+    topo: { name: 'Topographic', url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png', attr: '© OpenTopoMap, © OpenStreetMap contributors', max: 17 }
+  };
+  const cfg = { baseFov: 67, offset: 0, facing: 'environment', crosshair: true, camInfo: true, mapType: 'osm',
+                showFov: true, showDir: true, showPos: true, distUnit: 'km', angUnit: 'deg', theme: 'dark',
+                accent: ACCENTS[0], swapped: false, split: 0.5, fovColor: null, fovOpacity: 0.42, onboarded: false };
+  try { Object.assign(cfg, JSON.parse(localStorage.getItem('aimmap') || '{}')); } catch (e) {}
+  const save = () => { try { localStorage.setItem('aimmap', JSON.stringify(cfg)); } catch (e) {} };
+
+  const S = { lat: null, lng: null, acc: null, heading: null, pitch: 0, hs: 0, hc: 1, hasHeading: false,
+              zoom: 1, hw: false, manual: false, demo: false, follow: true, torch: false, mode: 'view', lock: null, focus: null, alt: null,
+              st: { cam: ['wait', 'Starting…'], gps: ['wait', 'Waiting…'], cmp: ['wait', 'Waiting…'] } };
+  // Native bridge (present only inside the Android app) and Pro state.
+  const N = window.AimNative || null, IS_NATIVE = !!(N && N.isNative);
+  const PRO_KEY = IS_NATIVE ? 'aimmap_pro' : 'aimmap_pro_dev';
+  const PRO = { on: false, price: '€1.49' };
+  try { PRO.on = localStorage.getItem(PRO_KEY) === '1'; } catch (e) {}
+  let LOCS = [];
+  try { LOCS = JSON.parse(localStorage.getItem('aimmap_locs') || '[]'); if (!Array.isArray(LOCS)) LOCS = []; } catch (e) { LOCS = []; }
+  const saveLocs = () => { try { localStorage.setItem('aimmap_locs', JSON.stringify(LOCS)); } catch (e) {} };
+  let dirty = true, track = null, firstFix = true, zoomMin = 1, zoomMax = 10, camDims = { w: 400, h: 400 }, geoId = null, orientBound = false;
+
+  const el = { app: $('app'), stage: $('stage'), video: $('video'), cam: $('camPane'), mapPane: $('mapPane'), cv: $('mapCv'),
+               zoomIn: $('zoomIn') };
+
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.hidden = false;
+    clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, 4000);
+  }
+  const setSt = (k, s, t) => { S.st[k] = [s, t]; if (S.mode === 'info') buildInfo(); };
+
+  // ---------------- theme / layout ----------------
+  const mqDark = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const th = cfg.theme === 'system' ? (mqDark.matches ? 'dark' : 'light') : cfg.theme;
+    document.documentElement.dataset.theme = th;
+    document.documentElement.style.setProperty('--accent', cfg.accent);
+    const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = th === 'dark' ? '#0e1012' : '#f2f3f4';
+    dirty = true;
+  }
+  mqDark.addEventListener && mqDark.addEventListener('change', applyTheme);
+  const isLandscape = () => window.matchMedia('(orientation:landscape)').matches;
+  function applyLayout() {
+    el.stage.classList.toggle('swapped', cfg.swapped);
+    const f = Math.min(0.78, Math.max(0.22, cfg.split));
+    el.cam.style.flex = f + ' 1 0'; el.mapPane.style.flex = (1 - f) + ' 1 0';
+    setTimeout(() => { resizeMap(); dirty = true; }, 30);
+  }
+
+  // ---------------- map engine (canvas, Web Mercator) ----------------
+  const ctx = el.cv.getContext('2d');
+  const M = { lat: DEF.lat, lng: DEF.lng, z: 15, w: 0, h: 0, dpr: 1 };
+  const cache = new Map();
+  function resizeMap() {
+    const w = el.mapPane.clientWidth, h = el.mapPane.clientHeight;
+    if (!w || !h) return;
+    M.dpr = Math.min(window.devicePixelRatio || 1, 3);
+    if (w !== M.w || h !== M.h) {
+      const first = M.w === 0; M.w = w; M.h = h;
+      el.cv.width = Math.round(w * M.dpr); el.cv.height = Math.round(h * M.dpr);
+      if (first) fitCone(true); else if (S.follow) fitCone(false);
+    }
+    dirty = true;
+  }
+  new ResizeObserver(resizeMap).observe(el.mapPane);
+  // Map zoom is independent of the cone: the cone keeps a fixed length on screen.
+  function fitCone(reset) {
+    if (!M.w) return;
+    M.lat = S.lat != null ? S.lat : M.lat; M.lng = S.lng != null ? S.lng : M.lng;
+    if (reset) M.z = 16;
+    dirty = true;
+  }
+  const toScreen = (lat, lng) => {
+    const c = proj(M.lat, M.lng, M.z), p = proj(lat, lng, M.z);
+    return [M.w / 2 + p[0] - c[0], M.h / 2 + p[1] - c[1]];
+  };
+  const fromScreen = (x, y) => {
+    const c = proj(M.lat, M.lng, M.z); return unproj(c[0] + x - M.w / 2, c[1] + y - M.h / 2, M.z);
+  };
+  function zoomAbout(px, py, nz) {
+    nz = Math.max(2, Math.min(19, nz));
+    const g = fromScreen(px, py); M.z = nz;
+    const gp = proj(g[0], g[1], M.z);
+    const c = unproj(gp[0] - (px - M.w / 2), gp[1] - (py - M.h / 2), M.z);
+    M.lat = c[0]; M.lng = c[1]; dirty = true;
+  }
+  function unfollow() { if (S.follow) { S.follow = false; syncLocate(); } }
+  function syncLocate() { $('btnLocate').classList.toggle('on', S.follow); }
+
+  function tileImg(def, z, x, y) {
+    const key = cfg.mapType + '/' + z + '/' + x + '/' + y;
+    let t = cache.get(key);
+    if (!t) {
+      t = new Image(); t.onload = () => { t._ok = true; dirty = true; }; t.onerror = () => { t._err = true; };
+      t.src = def.url.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+      cache.set(key, t);
+      if (cache.size > 500) cache.delete(cache.keys().next().value);
+    } else { cache.delete(key); cache.set(key, t); }
+    return t;
+  }
+  function drawMap() {
+    if (!M.w) return;
+    const def = TILES[cfg.mapType] || TILES.osm;
+    ctx.setTransform(M.dpr, 0, 0, M.dpr, 0, 0);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--mapbg').trim() || '#20262a';
+    ctx.fillRect(0, 0, M.w, M.h);
+    const z0 = Math.max(0, Math.min(def.max, Math.round(M.z))), sc = Math.pow(2, M.z - z0), n = Math.pow(2, z0);
+    const c0 = proj(M.lat, M.lng, z0), left = c0[0] - M.w / 2 / sc, top = c0[1] - M.h / 2 / sc;
+    const tx0 = Math.floor(left / 256), tx1 = Math.floor((left + M.w / sc) / 256);
+    const ty0 = Math.floor(top / 256), ty1 = Math.floor((top + M.h / sc) / 256);
+    for (let ty = Math.max(0, ty0); ty <= Math.min(n - 1, ty1); ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const wx = ((tx % n) + n) % n, t = tileImg(def, z0, wx, ty);
+        const sx = (tx * 256 - left) * sc, sy = (ty * 256 - top) * sc, sz = 256 * sc + 0.6;
+        if (t._ok) ctx.drawImage(t, sx, sy, sz, sz);
+      }
+    }
+    // The cone has a fixed length on screen, whatever the map zoom is.
+    const L = Math.min(M.w, M.h) * 0.42;
+    const wedge = (P, hd, fv, col, o) => {
+      const n = 28; ctx.beginPath(); ctx.moveTo(P[0], P[1]);
+      for (let i = 0; i <= n; i++) { const a = rad(hd - fv / 2 + fv * i / n); ctx.lineTo(P[0] + L * Math.sin(a), P[1] - L * Math.cos(a)); }
+      ctx.closePath();
+      const g = ctx.createRadialGradient(P[0], P[1], 0, P[0], P[1], L);
+      g.addColorStop(0, hexA(col, o * 0.3)); g.addColorStop(1, hexA(col, o));
+      ctx.fillStyle = g; ctx.fill();
+      ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.strokeStyle = col; ctx.stroke();
+    };
+    const ray = (P, hd, col, dash, w) => {
+      const a = rad(hd); ctx.save(); ctx.setLineDash(dash); ctx.lineWidth = w || 2.5; ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.moveTo(P[0], P[1]); ctx.lineTo(P[0] + L * Math.sin(a), P[1] - L * Math.cos(a)); ctx.stroke(); ctx.restore();
+    };
+    if (PRO.on) {
+      const foc = S.focus && LOCS.find(x => x.id === S.focus);
+      if (foc && foc.heading != null) wedge(toScreen(foc.lat, foc.lng), foc.heading, foc.fov || 60, '#ff8a3d', 0.4);
+      ctx.font = '600 12px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+      LOCS.forEach(l => {
+        const Q = toScreen(l.lat, l.lng);
+        if (Q[0] < -40 || Q[1] < -20 || Q[0] > M.w + 120 || Q[1] > M.h + 20) return;
+        ctx.beginPath(); ctx.arc(Q[0], Q[1], 7, 0, 7); ctx.fillStyle = '#ff8a3d'; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke();
+        ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.strokeText(l.name, Q[0] + 12, Q[1]); ctx.fillStyle = '#fff'; ctx.fillText(l.name, Q[0] + 12, Q[1]);
+      });
+    }
+    const lat = S.lat, lng = S.lng;
+    if (lat != null) {
+      const O = toScreen(lat, lng);
+      const color = (PRO.on && cfg.fovColor) || cfg.accent, op = PRO.on ? cfg.fovOpacity : 0.42;
+      if (cfg.showFov && S.heading != null) wedge(O, S.heading, currentFov(), color, op);
+      if (cfg.showDir && S.heading != null) ray(O, S.heading, color, [9, 7]);
+      if (PRO.on && S.lock != null) { ray(O, S.lock, 'rgba(0,0,0,.45)', [3, 6], 5); ray(O, S.lock, '#ffffff', [3, 6], 2.5); }
+      if (cfg.showPos) {
+        const accPx = S.acc ? S.acc / mPerPx(lat, M.z) : 0;
+        if (accPx > 12) { ctx.beginPath(); ctx.arc(O[0], O[1], accPx, 0, 7); ctx.fillStyle = 'rgba(47,125,246,.14)'; ctx.fill(); }
+        ctx.beginPath(); ctx.arc(O[0], O[1], 11, 0, 7); ctx.fillStyle = '#fff'; ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 5; ctx.fill(); ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(O[0], O[1], 8, 0, 7); ctx.fillStyle = '#2f7df6'; ctx.fill();
+      }
+    }
+    // scale bar
+    const mpp = mPerPx(M.lat, M.z), ns = niceScale(mpp * 90, cfg.distUnit);
+    $('scaleBar').style.width = Math.round(ns.meters / mpp) + 'px'; $('scaleLbl').textContent = ns.label;
+  }
+  function hexA(hex, a) {
+    const h = hex.replace('#', ''), n = parseInt(h, 16);
+    return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  function setTiles() {
+    const d = TILES[cfg.mapType] || TILES.osm; $('attr').textContent = d.attr; dirty = true;
+  }
+
+  // map gestures
+  const ptrs = new Map(); let last = null;
+  el.cv.addEventListener('pointerdown', e => { el.cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.offsetX, e.offsetY]); last = null; });
+  el.cv.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId)) return;
+    const prev = ptrs.get(e.pointerId), cur = [e.offsetX, e.offsetY];
+    if (ptrs.size === 1) {
+      const c = proj(M.lat, M.lng, M.z), nc = unproj(c[0] - (cur[0] - prev[0]), c[1] - (cur[1] - prev[1]), M.z);
+      M.lat = nc[0]; M.lng = nc[1]; unfollow(); dirty = true;
+    } else if (ptrs.size === 2) {
+      const other = [...ptrs.entries()].find(([id]) => id !== e.pointerId)[1];
+      const d0 = Math.hypot(prev[0] - other[0], prev[1] - other[1]), d1 = Math.hypot(cur[0] - other[0], cur[1] - other[1]);
+      if (d0 > 8 && d1 > 8) zoomAbout((cur[0] + other[0]) / 2, (cur[1] + other[1]) / 2, M.z + Math.log2(d1 / d0));
+      unfollow();
+    }
+    ptrs.set(e.pointerId, cur);
+  });
+  const endPtr = e => ptrs.delete(e.pointerId);
+  el.cv.addEventListener('pointerup', endPtr); el.cv.addEventListener('pointercancel', endPtr);
+  el.cv.addEventListener('wheel', e => { e.preventDefault(); zoomAbout(e.offsetX, e.offsetY, M.z - e.deltaY * 0.0025); unfollow(); }, { passive: false });
+  el.cv.addEventListener('dblclick', e => { zoomAbout(e.offsetX, e.offsetY, M.z + 1); unfollow(); });
+  const stepZoom = d => { zoomAbout(M.w / 2, M.h / 2, Math.round(M.z) + d); };
+  $('btnZin').addEventListener('click', () => stepZoom(1));
+  $('btnZout').addEventListener('click', () => stepZoom(-1));
+  $('btnLocate').addEventListener('click', () => {
+    if (S.lat == null) { toast('Still waiting for a GPS position.'); return; }
+    S.follow = true; S.focus = null; syncLocate(); fitCone(false);
+  });
+  $('btnLayers').addEventListener('click', () => {
+    const keys = Object.keys(TILES); cfg.mapType = keys[(keys.indexOf(cfg.mapType) + 1) % keys.length];
+    save(); setTiles(); toast(TILES[cfg.mapType].name);
+  });
+
+  // ---------------- FOV / HUD ----------------
+  function currentFov() {
+    const v = el.video;
+    return hFov({ baseFov: cfg.baseFov, zoom: S.zoom, vw: v.videoWidth || 3, vh: v.videoHeight || 4, pw: camDims.w, ph: camDims.h });
+  }
+  new ResizeObserver(() => { const w = el.cam.clientWidth, h = el.cam.clientHeight; if (w && h) { camDims = { w, h }; dirty = true; } }).observe(el.cam);
+  function updateHud() {
+    const fov = currentFov();
+    $('pHead').textContent = S.heading == null ? '--°' : fmtAngle(S.heading, cfg.angUnit) + ' ' + cardinal(S.heading);
+    $('pFov').textContent = 'FOV ' + Math.round(fov) + '°';
+    $('pTilt').textContent = 'Tilt ' + (S.heading == null && !S.hasHeading ? '--' : Math.round(S.pitch)) + '°';
+    $('zoomChip').textContent = (Math.round(S.zoom * 10) / 10).toString().replace(/\.0$/, '') + 'x';
+    $('infoPill').hidden = !cfg.camInfo; $('cross').hidden = !cfg.crosshair;
+    $('gpsWait').hidden = S.lat != null;
+    updateLockBar();
+  }
+  (function loop() { if (dirty) { dirty = false; updateHud(); drawMap(); } requestAnimationFrame(loop); })();
+  const touch = () => { dirty = true; };
+
+  // ---------------- heading ----------------
+  function pushHeading(h, snap) {
+    const a = rad(h);
+    if (!S.hasHeading || snap) { S.hs = Math.sin(a); S.hc = Math.cos(a); S.hasHeading = true; }
+    else { S.hs += (Math.sin(a) - S.hs) * 0.2; S.hc += (Math.cos(a) - S.hc) * 0.2; }
+    S.heading = (deg(Math.atan2(S.hs, S.hc)) + 360) % 360; touch();
+  }
+  function onOrient(e) {
+    if (S.manual && S.demo) return;
+    let h = null, p = null;
+    if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
+      h = e.webkitCompassHeading;
+      if (e.beta != null && e.gamma != null) p = cameraDirection(0, e.beta, e.gamma).pitch;
+    } else if (e.alpha != null && e.beta != null && e.gamma != null && (e.absolute === true || e.type === 'deviceorientationabsolute')) {
+      const r = cameraDirection(e.alpha, e.beta, e.gamma);
+      p = r.pitch; if (r.horiz > 0.25) h = r.heading;
+    }
+    if (p != null) S.pitch = cfg.facing === 'user' ? -p : p;
+    if (h == null) return;
+    if (cfg.facing === 'user') h += 180;
+    const wasManual = S.manual;
+    if (wasManual) { S.manual = false; $('headRow').hidden = true; }   // real compass data arrived after the fallback
+    pushHeading((h + cfg.offset + 720) % 360, wasManual);
+    if (S.st.cmp[0] !== 'ok') setSt('cmp', 'ok', 'Active');
+  }
+  function startOrientation(allowed) {
+    if (!allowed) { setSt('cmp', 'err', 'Permission denied'); enableManual(); return; }
+    if (!orientBound) {
+      orientBound = true;
+      window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onOrient, true);
+    }
+    setTimeout(() => { if (!S.hasHeading) { setSt('cmp', 'err', 'Not available · manual heading'); enableManual(); } }, 2500);
+  }
+  function enableManual() {
+    S.manual = true; $('headRow').hidden = false;
+    if (!S.hasHeading) pushHeading(0, true);
+    $('headIn').value = Math.round(S.heading); $('headOut').textContent = Math.round(S.heading) + '°';
+  }
+  $('headIn').addEventListener('input', () => { $('headOut').textContent = $('headIn').value + '°'; pushHeading(+$('headIn').value, true); });
+  function setDemo(on) {
+    S.demo = on;
+    if (on) {
+      if (S.lat == null) { S.lat = DEF.lat; S.lng = DEF.lng; S.acc = null; if (firstFix) { firstFix = false; fitCone(true); } }
+      setSt('gps', 'wait', 'Simulated'); setSt('cmp', 'wait', 'Simulated · manual heading'); enableManual();
+    } else {
+      S.manual = false; $('headRow').hidden = true; S.hasHeading = false; S.heading = null;
+      setSt('cmp', 'wait', 'Waiting…'); startOrientation(true);
+    }
+    touch(); if (S.mode === 'info') buildInfo();
+  }
+
+  // ---------------- GPS ----------------
+  function startGeo() {
+    if (!navigator.geolocation) { setSt('gps', 'err', 'Not available'); return; }
+    if (geoId != null) return;
+    geoId = navigator.geolocation.watchPosition(p => {
+      if (S.demo) return;
+      S.lat = p.coords.latitude; S.lng = p.coords.longitude; S.acc = p.coords.accuracy;
+      S.alt = (p.coords.altitude != null && isFinite(p.coords.altitude)) ? Math.round(p.coords.altitude) : null;
+      setSt('gps', 'ok', '±' + Math.round(p.coords.accuracy) + ' m');
+      if (firstFix) { firstFix = false; S.follow = true; syncLocate(); fitCone(true); }
+      else if (S.follow) { M.lat = S.lat; M.lng = S.lng; }
+      touch();
+    }, err => {
+      setSt('gps', 'err', err.code === 1 ? 'Permission denied' : 'No signal');
+      if (err.code === 1) toast('Location is turned off for AimMap.');
+    }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 25000 });
+  }
+
+  // ---------------- camera & zoom ----------------
+  async function startCamera() {
+    if (track) { try { track.stop(); } catch (e) {} track = null; }
+    S.torch = false; $('btnFlash').classList.remove('on'); S.hw = false; zoomMin = 1; zoomMax = 10;
+    el.zoomIn.min = 1; el.zoomIn.max = 10; el.zoomIn.step = 0.1;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setSt('cam', 'err', 'Needs a secure (https) context'); return; }
+    setSt('cam', 'wait', 'Starting…');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: cfg.facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+      el.video.srcObject = stream; await el.video.play().catch(() => {});
+      $('noCam').hidden = true; track = stream.getVideoTracks()[0];
+      const caps = (track.getCapabilities && track.getCapabilities()) || {};
+      if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+        S.hw = true; zoomMin = Math.max(1, caps.zoom.min); zoomMax = Math.min(caps.zoom.max, 10);
+        el.zoomIn.min = zoomMin; el.zoomIn.max = zoomMax; el.zoomIn.step = caps.zoom.step || 0.1;
+      }
+      setZoom(1);
+      setSt('cam', 'ok', S.hw ? 'Active · optical zoom' : 'Active · digital zoom');
+    } catch (e) {
+      setSt('cam', 'err', e && e.name === 'NotAllowedError' ? 'Permission denied' : 'Could not open the camera');
+      toast('The camera could not be opened. Check the camera permission.');
+    }
+  }
+  el.video.addEventListener('loadedmetadata', touch);
+  let zoomPending = false;
+  function setZoom(z) {
+    z = Math.min(zoomMax, Math.max(zoomMin, z)); S.zoom = z; el.zoomIn.value = z;
+    const mir = cfg.facing === 'user' ? -1 : 1;
+    if (S.hw && track) {
+      el.video.style.transform = mir < 0 ? 'scaleX(-1)' : '';
+      if (!zoomPending) {
+        zoomPending = true;
+        requestAnimationFrame(() => {
+          zoomPending = false;
+          track.applyConstraints({ advanced: [{ zoom: S.zoom }] }).catch(() => {
+            S.hw = false; zoomMin = 1; zoomMax = 10; el.zoomIn.min = 1; el.zoomIn.max = 10;
+            el.video.style.transform = 'scale(' + (mir * S.zoom) + ',' + S.zoom + ')';
+          });
+        });
+      }
+    } else { el.video.style.transform = 'scale(' + (mir * z) + ',' + z + ')'; }
+    touch();
+  }
+  el.zoomIn.addEventListener('input', () => setZoom(+el.zoomIn.value));
+  $('zoomChip').addEventListener('click', () => { const p = $('zoomPop'); p.hidden = !p.hidden; });
+  let pd = 0, pz = 1;
+  const span = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  el.cam.addEventListener('touchstart', e => { if (e.touches.length === 2) { pd = span(e.touches); pz = S.zoom; } }, { passive: true });
+  el.cam.addEventListener('touchmove', e => { if (e.touches.length === 2 && pd) { e.preventDefault(); setZoom(pz * span(e.touches) / pd); } }, { passive: false });
+  el.cam.addEventListener('touchend', () => { pd = 0; });
+  $('btnFlash').addEventListener('click', async () => {
+    const caps = (track && track.getCapabilities && track.getCapabilities()) || {};
+    if (!caps.torch) { toast('Flashlight is not available on this camera.'); return; }
+    try { S.torch = !S.torch; await track.applyConstraints({ advanced: [{ torch: S.torch }] }); $('btnFlash').classList.toggle('on', S.torch); }
+    catch (e) { S.torch = false; toast('Flashlight could not be switched.'); }
+  });
+  $('btnFlip').addEventListener('click', () => { cfg.facing = cfg.facing === 'user' ? 'environment' : 'user'; save(); S.hasHeading = S.manual ? S.hasHeading : false; startCamera(); buildSettings(); });
+  $('btnSwap').addEventListener('click', () => { cfg.swapped = !cfg.swapped; save(); applyLayout(); });
+
+  // ---------------- splitter ----------------
+  (() => {
+    const sp = $('splitter'); let drag = false;
+    sp.addEventListener('pointerdown', e => { drag = true; sp.setPointerCapture(e.pointerId); });
+    sp.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const r = el.stage.getBoundingClientRect(), hz = isLandscape();
+      let f = hz ? (e.clientX - r.left) / r.width : (e.clientY - r.top) / r.height;
+      if (cfg.swapped) f = 1 - f;
+      cfg.split = Math.min(0.78, Math.max(0.22, f)); applyLayout();
+    });
+    const end = () => { if (drag) { drag = false; save(); } };
+    sp.addEventListener('pointerup', end); sp.addEventListener('pointercancel', end);
+  })();
+
+  // ---------------- navigation ----------------
+  let prevMode = 'view';
+  function setMode(m) {
+    if (m === 'settings') { $('settings').hidden = false; markNav('settings'); buildSettings(); return; }
+    S.mode = m; el.app.dataset.mode = m; $('infoPanel').hidden = m !== 'info';
+    if (m === 'info') buildInfo();
+    prevMode = m; markNav(m);
+    setTimeout(() => { resizeMap(); dirty = true; }, 30);
+  }
+  function markNav(m) { document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.mode === m)); }
+  document.querySelectorAll('#nav button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  $('setClose').addEventListener('click', () => closeSettings());
+
+  // ---------------- info panel ----------------
+  function buildInfo() {
+    const f = (v, n) => v == null ? '--' : v.toFixed(n);
+    const row = (k, v) => '<div class="kv"><span>' + k + '</span><b>' + v + '</b></div>';
+    const srow = (k, s) => '<div class="kv"><span>' + k + '</span><b><i class="dot" data-s="' + s[0] + '"></i>' + s[1] + '</b></div>';
+    const p = $('infoPanel'), top = p.scrollTop;
+    p.innerHTML =
+      '<div class="card"><h3>Aim</h3>' +
+        row('Heading', S.heading == null ? '--' : fmtAngle(S.heading, cfg.angUnit) + ' ' + cardinal(S.heading)) +
+        row('Tilt', S.heading == null ? '--' : Math.round(S.pitch) + '°') +
+        row('Field of view', Math.round(currentFov()) + '°') +
+        row('Zoom', (Math.round(S.zoom * 10) / 10) + 'x') + '</div>' +
+      '<div class="card"><h3>Position</h3>' +
+        row('Latitude', f(S.lat, 5)) + row('Longitude', f(S.lng, 5)) +
+        row('Accuracy', S.acc ? '±' + Math.round(S.acc) + ' m' : '--') + '</div>' +
+      '<div class="card"><h3>Sensors</h3>' + srow('Camera', S.st.cam) + srow('GPS', S.st.gps) + srow('Compass', S.st.cmp) + '</div>' +
+      '<button class="btnwide" id="locBtn">Saved locations (' + LOCS.length + ')' + (PRO.on ? '' : ' · Pro') + '</button>' +
+      '<button class="btnwide' + (S.demo ? ' on' : '') + '" id="demoBtn">' + (S.demo ? 'Simulating sensors (tap to stop)' : 'Simulate sensors') + '</button>' +
+      '<div class="card"><h3>How it works</h3><div class="how">' +
+        '<p>The yellow cone on the map is the area the camera sees. It starts at your GPS position and opens in the direction the phone is pointing.</p>' +
+        '<p>Zooming in makes the cone narrower. The Range slider sets how far the cone reaches.</p>' +
+        '<p>If the cone is off by a few degrees, set Compass correction in Settings. Moving the phone in a figure 8 recalibrates the compass.</p></div></div>';
+    p.scrollTop = top;
+    $('demoBtn').addEventListener('click', () => setDemo(!S.demo));
+    $('locBtn').addEventListener('click', needPro(() => openLocs()));
+  }
+  let infoDown = false;
+  $('infoPanel').addEventListener('pointerdown', () => { infoDown = true; });
+  window.addEventListener('pointerup', () => { setTimeout(() => { infoDown = false; }, 50); });
+  setInterval(() => { if (S.mode === 'info' && !infoDown) buildInfo(); }, 1000);
+
+  // ---------------- settings ----------------
+  const optLabel = (opts, v) => (opts.find(o => o[0] === v) || [0, v])[1];
+  const SECTIONS = [
+    { title: 'Camera', icon: 'camera', rows: [
+      { t: 'pick', k: 'facing', label: 'Camera', opts: [['environment', 'Back'], ['user', 'Front']], fmt: v => (v === 'user' ? 'Front' : 'Back') + ' (1x)', after: () => { S.hasHeading = S.manual ? S.hasHeading : false; startCamera(); } },
+      { t: 'num', k: 'baseFov', label: 'Lens field of view', min: 30, max: 120, step: 1, unit: '°', hint: 'Field of view of the lens along the long side of the picture. Most phones are 65–75°.' },
+      { t: 'num', k: 'offset', label: 'Compass correction', min: -180, max: 180, step: 1, unit: '°', hint: 'Added to the compass heading. Use it if the cone points a little off.' },
+      { t: 'tog', k: 'crosshair', label: 'Show crosshair' },
+      { t: 'tog', k: 'camInfo', label: 'Show camera info' }] },
+    { title: 'Map', icon: 'map', rows: [
+      { t: 'pick', k: 'mapType', label: 'Map type', opts: Object.keys(TILES).map(k => [k, TILES[k].name]), after: setTiles },
+      { t: 'tog', k: 'showFov', label: 'Show field of view (FOV)' },
+      { t: 'tog', k: 'showDir', label: 'Show direction line' },
+      { t: 'tog', k: 'showPos', label: 'Show my position' }] },
+    { title: 'Units', icon: 'ruler', rows: [
+      { t: 'pick', k: 'distUnit', label: 'Distance', opts: [['km', 'Kilometers (km)'], ['mi', 'Miles (mi)']] },
+      { t: 'pick', k: 'angUnit', label: 'Angles', opts: [['deg', 'Degrees (°)'], ['dm', 'Degrees, minutes (°′)']] }] },
+    { title: 'Appearance', icon: 'palette', rows: [
+      { t: 'pick', k: 'theme', label: 'Theme', opts: [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']], after: applyTheme },
+      { t: 'color', k: 'accent', label: 'Accent color' }] }
+  ];
+  function buildSettings() {
+    const b = $('setBody'), top = b.scrollTop; let h = proSectionHtml();
+    SECTIONS.forEach((s, si) => {
+      h += '<section class="sec"><h2>' + ic(s.icon) + s.title + '</h2>';
+      s.rows.forEach((r, ri) => {
+        const id = 'r' + si + '_' + ri, v = cfg[r.k];
+        if (r.t === 'tog') h += '<div class="row" style="cursor:default">' + r.label + '<button class="sw" role="switch" aria-checked="' + !!v + '" aria-label="' + r.label + '" data-row="' + id + '"></button></div>';
+        else if (r.t === 'pick') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val">' + (r.fmt ? r.fmt(v) : optLabel(r.opts, v)) + ic('chev') + '</span></button>';
+        else if (r.t === 'num') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val">' + v + r.unit + ic('chev') + '</span></button>';
+        else if (r.t === 'color') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val"><span class="swatch"></span></span></button>';
+      });
+      h += '</section>';
+    });
+    h += '<section class="sec"><h2>' + ic('info') + 'About</h2><div class="about"><div>AimMap<small>Created by <b>Nickar</b></small></div><div>v1.0.0<small>Map data © OpenStreetMap contributors</small></div></div></section>';
+    b.innerHTML = h; b.scrollTop = top; wireProSection(b);
+    b.querySelectorAll('[data-row]').forEach(n => {
+      const [si, ri] = n.dataset.row.slice(1).split('_').map(Number), r = SECTIONS[si].rows[ri];
+      n.addEventListener('click', () => {
+        if (r.t === 'tog') { cfg[r.k] = !cfg[r.k]; save(); touch(); buildSettings(); }
+        else if (r.t === 'pick') openPick(r);
+        else if (r.t === 'num') openNum(r);
+        else if (r.t === 'color') openColor(r);
+      });
+    });
+  }
+  const sheetBg = $('sheetBg'), sheet = $('sheet');
+  const closeSheet = () => { sheetBg.hidden = true; sheet.innerHTML = ''; };
+  sheetBg.addEventListener('click', e => { if (e.target === sheetBg) closeSheet(); });
+  function openPick(r) {
+    sheet.innerHTML = '<h4>' + r.label + '</h4>' + r.opts.map(o => '<button class="opt" data-v="' + o[0] + '">' + o[1] + (cfg[r.k] === o[0] ? ic('check') : '') + '</button>').join('');
+    sheet.querySelectorAll('.opt').forEach(b => b.addEventListener('click', () => {
+      cfg[r.k] = b.dataset.v; save(); closeSheet(); if (r.after) r.after(); touch(); buildSettings();
+    }));
+    sheetBg.hidden = false;
+  }
+  function openNum(r) {
+    sheet.innerHTML = '<h4>' + r.label + '</h4>' + (r.hint ? '<p class="numhint">' + r.hint + '</p>' : '') +
+      '<div class="numed"><button id="nMinus" aria-label="Decrease">−</button><input id="nIn" type="number" inputmode="decimal" min="' + r.min + '" max="' + r.max + '" step="' + r.step + '" value="' + cfg[r.k] + '"><button id="nPlus" aria-label="Increase">+</button></div>' +
+      '<button class="donebtn" id="nDone">Done</button>';
+    const inp = $('nIn'), commit = () => {
+      let v = parseFloat(inp.value); if (isNaN(v)) v = cfg[r.k]; v = Math.max(r.min, Math.min(r.max, v));
+      cfg[r.k] = v; inp.value = v; save(); touch();
+    };
+    $('nMinus').addEventListener('click', () => { inp.value = (parseFloat(inp.value) || 0) - r.step; commit(); });
+    $('nPlus').addEventListener('click', () => { inp.value = (parseFloat(inp.value) || 0) + r.step; commit(); });
+    inp.addEventListener('change', commit);
+    $('nDone').addEventListener('click', () => { commit(); closeSheet(); buildSettings(); });
+    sheetBg.hidden = false;
+  }
+  function openColor(r) {
+    sheet.innerHTML = '<h4>' + r.label + '</h4><div class="swgrid">' + ACCENTS.map(c => '<button data-c="' + c + '" class="' + (cfg.accent === c ? 'sel' : '') + '" style="background:' + c + '" aria-label="' + c + '"></button>').join('') + '</div>';
+    sheet.querySelectorAll('.swgrid button').forEach(b => b.addEventListener('click', () => { cfg.accent = b.dataset.c; save(); applyTheme(); closeSheet(); buildSettings(); }));
+    sheetBg.hidden = false;
+  }
+
+  // ================= AimMap Pro =================
+  const sub = (a, b) => angDiff(a, b);
+  function applyProUi() {
+    document.documentElement.classList.toggle('pro', PRO.on);
+    $('proBadge').hidden = !PRO.on;
+    $('proPrice').textContent = PRO.price;
+    $('btnLock').classList.toggle('on', PRO.on && S.lock != null);
+  }
+  let proReason = '';
+  function setPro(on, announce) {
+    const was = PRO.on; PRO.on = on;
+    try { localStorage.setItem(PRO_KEY, on ? '1' : '0'); } catch (e) {}
+    applyProUi(); touch();
+    if (on && !was) {
+      proReason = ''; $('pro').hidden = true;
+      if (announce) toast('AimMap Pro unlocked. Thank you!');
+    }
+    if (!$('settings').hidden) buildSettings();
+    if (S.mode === 'info') buildInfo();
+  }
+  function openPro(reason) { proReason = reason || ''; $('proPrice').textContent = PRO.price; $('pro').hidden = false; $('proScroll').scrollTop = 0; }
+  function exitApp() { if (N && N.app && N.app.exit) N.app.exit(); }
+  function closePro() { const r = proReason; proReason = ''; $('pro').hidden = true; if (r === 'exit') exitApp(); }
+  async function buyPro() {
+    if (!IS_NATIVE || !N.billing) { toast('Purchases are available in the Android app from Google Play.'); return; }
+    const b = $('proBuy'); b.disabled = true;
+    try { const r = await N.billing.buy(); if (r && r.error) toast(r.error); }
+    catch (e) { toast('The purchase could not be started.'); }
+    b.disabled = false;
+  }
+  async function restoreBuy() {
+    if (!IS_NATIVE || !N.billing) { toast('Restore is available in the Android app.'); return; }
+    try { await N.billing.restore(); } catch (e) {}
+    toast(PRO.on ? 'AimMap Pro is active on this account.' : 'No Pro purchase found for this Google account.');
+  }
+  const needPro = fn => (...a) => { if (PRO.on) return fn(...a); openPro('feature'); };
+  $('proClose').addEventListener('click', closePro);
+  $('proBuy').addEventListener('click', buyPro);
+
+  let billingDone; const billingReady = new Promise(r => { billingDone = r; });
+  async function initBilling() {
+    if (!IS_NATIVE || !N.billing) { billingDone(); return; }
+    try {
+      await N.billing.init({
+        onOwned: () => setPro(true, true),
+        onPrice: p => { if (p && p !== PRO.price) { PRO.price = p; $('proPrice').textContent = p; } }
+      });
+    } catch (e) {}
+    billingDone();
+  }
+
+  // ---- settings: Pro section ----
+  const PRO_ROWS = [
+    { icon: 'pin', label: 'Saved locations', desc: 'Store your favorite spots with direction, elevation and notes.', run: () => openLocs() },
+    { icon: 'locate', label: 'Direction lock', desc: 'Lock a specific bearing and see the deviation in real time.', run: () => openBearing() },
+    { icon: 'camera', label: 'Geo screenshots', desc: 'Save photos with location, direction, angle and date.', run: () => { closeSettings(); setTimeout(geoShot, 350); } },
+    { icon: 'sliders', label: 'Advanced view options', desc: 'Customize the FOV cone color and opacity.', run: () => openFovStyle() },
+    { icon: 'upload', label: 'Export & import', desc: 'Backup and share your saved locations (GPX or CSV).', run: () => openExport() }
+  ];
+  function proSectionHtml() {
+    let h = '';
+    if (!PRO.on) h += '<div class="promo"><div class="pc">' + ic('crown') + '</div><div class="pt"><b>Upgrade to AimMap Pro</b><span>Ad-free, with all the extra tools. One-time payment, no subscriptions.</span></div><button class="pbuy" data-pro="upgrade">' + esc(PRO.price) + '</button></div>';
+    else h += '<div class="promo"><div class="pc">' + ic('crown') + '</div><div class="pt"><b>AimMap Pro unlocked</b><span>Thank you for your support. All Pro tools are active and ads are removed.</span></div></div>';
+    h += '<section class="sec"><h2>' + ic('crown') + 'AimMap Pro</h2>';
+    PRO_ROWS.forEach((r, i) => {
+      h += '<button class="row prorow" data-pro="' + i + '"><span class="pi">' + ic(r.icon) + '</span><span class="pl"><span>' + r.label + '</span><small>' + r.desc + '</small></span><span class="val">' + ic(PRO.on ? 'chev' : 'lock') + '</span></button>';
+    });
+    if (IS_NATIVE) h += '<button class="row" data-pro="restore"><span>Restore purchases</span><span class="val">' + ic('chev') + '</span></button>';
+    return h + '</section>';
+  }
+  function wireProSection(b) {
+    b.querySelectorAll('[data-pro]').forEach(n => n.addEventListener('click', () => {
+      const k = n.dataset.pro;
+      if (k === 'upgrade') openPro('feature');
+      else if (k === 'restore') restoreBuy();
+      else needPro(PRO_ROWS[+k].run)();
+    }));
+  }
+  function closeSettings() { $('settings').hidden = true; setMode('view'); }
+
+  // ---- saved locations ----
+  function openSaveSheet() {
+    if (S.lat == null) { toast('Waiting for a GPS position.'); return; }
+    sheet.innerHTML = '<h4>Save location</h4>' +
+      '<div class="fld"><label for="slName">Name</label><input id="slName" type="text" maxlength="60" value="' + esc('Spot ' + (LOCS.length + 1)) + '"></div>' +
+      '<div class="fld"><label for="slNotes">Notes</label><textarea id="slNotes" rows="3" maxlength="400" placeholder="Optional"></textarea></div>' +
+      '<p class="numhint">' + (S.heading == null ? 'No heading' : fmtAngle(S.heading, cfg.angUnit) + ' ' + cardinal(S.heading)) + ' · tilt ' + Math.round(S.pitch) + '° · ' + S.lat.toFixed(5) + ', ' + S.lng.toFixed(5) + (S.alt != null ? ' · ' + S.alt + ' m' : '') + '</p>' +
+      '<button class="donebtn" id="slSave">Save</button>';
+    sheetBg.hidden = false;
+    $('slSave').addEventListener('click', () => {
+      LOCS.unshift({ id: newId(), name: $('slName').value.trim() || 'Spot', notes: $('slNotes').value.trim(), lat: S.lat, lng: S.lng, alt: S.alt,
+                     heading: S.heading, pitch: S.pitch, fov: Math.round(currentFov()), zoom: S.zoom, ts: Date.now() });
+      saveLocs(); closeSheet(); touch(); toast('Location saved.');
+      if (!$('locs').hidden) renderLocs();
+    });
+  }
+  function openLocs() { $('locs').hidden = false; renderLocs(); }
+  function closeLocs() { $('locs').hidden = true; }
+  function renderLocs() {
+    const b = $('locsBody');
+    if (!LOCS.length) { b.innerHTML = '<div class="empty">' + ic('pin') + '<p>No saved locations yet.</p><p>Tap the pin button on the camera view to save where you are and where you are looking.</p></div>'; return; }
+    b.innerHTML = LOCS.map(l => '<button class="loc" data-id="' + l.id + '"><b>' + esc(l.name) + '</b><span>' +
+      (l.heading == null ? '--' : fmtAngle(l.heading, cfg.angUnit) + ' ' + cardinal(l.heading)) + ' · tilt ' + Math.round(l.pitch || 0) + '° · FOV ' + (l.fov == null ? '--' : l.fov) + '°</span><span>' +
+      l.lat.toFixed(5) + ', ' + l.lng.toFixed(5) + (l.alt != null ? ' · ' + l.alt + ' m' : '') + '</span>' +
+      (l.notes ? '<em>' + esc(l.notes) + '</em>' : '') + '<small>' + fmtStamp(l.ts) + '</small></button>').join('');
+    b.querySelectorAll('.loc').forEach(n => n.addEventListener('click', () => openLocDetail(n.dataset.id)));
+  }
+  function openLocDetail(id) {
+    const l = LOCS.find(x => x.id === id); if (!l) return;
+    sheet.innerHTML = '<h4>Saved location</h4>' +
+      '<div class="fld"><label for="ldName">Name</label><input id="ldName" type="text" maxlength="60" value="' + esc(l.name) + '"></div>' +
+      '<div class="fld"><label for="ldNotes">Notes</label><textarea id="ldNotes" rows="3" maxlength="400">' + esc(l.notes) + '</textarea></div>' +
+      '<div class="btnrow"><button class="sbtn" id="ldMap">Show on map</button><button class="sbtn danger" id="ldDel">Delete</button></div>' +
+      '<button class="donebtn" id="ldSave">Save changes</button>';
+    sheetBg.hidden = false;
+    $('ldSave').addEventListener('click', () => { l.name = $('ldName').value.trim() || l.name; l.notes = $('ldNotes').value.trim(); saveLocs(); closeSheet(); renderLocs(); });
+    let armed = false;
+    $('ldDel').addEventListener('click', () => {
+      if (!armed) { armed = true; $('ldDel').textContent = 'Tap again to delete'; return; }
+      LOCS = LOCS.filter(x => x.id !== id); if (S.focus === id) S.focus = null; saveLocs(); closeSheet(); renderLocs(); touch();
+    });
+    $('ldMap').addEventListener('click', () => {
+      closeSheet(); closeLocs(); $('settings').hidden = true; setMode('map'); S.focus = l.id;
+      setTimeout(() => { M.lat = l.lat; M.lng = l.lng; M.z = 16; unfollow(); touch(); }, 80);
+    });
+  }
+  $('locsClose').addEventListener('click', closeLocs);
+  $('locsAdd').addEventListener('click', openSaveSheet);
+  $('locsExport').addEventListener('click', openExport);
+
+  // ---- export / import ----
+  function openExport() {
+    sheet.innerHTML = '<h4>Export & import</h4><p class="numhint">' + LOCS.length + ' saved location' + (LOCS.length === 1 ? '' : 's') + '.</p>' +
+      '<button class="opt" id="exGpx">Export as GPX</button><button class="opt" id="exCsv">Export as CSV</button><button class="opt" id="exImp">Import from a GPX or CSV file…</button>';
+    sheetBg.hidden = false;
+    $('exGpx').addEventListener('click', () => { closeSheet(); exportAs('gpx'); });
+    $('exCsv').addEventListener('click', () => { closeSheet(); exportAs('csv'); });
+    $('exImp').addEventListener('click', () => { closeSheet(); $('impFile').value = ''; $('impFile').click(); });
+  }
+  async function deliverText(name, text, mime) {
+    if (IS_NATIVE && N.files && N.files.shareText) { try { await N.files.shareText(name, text, mime); } catch (e) { toast('The file could not be shared.'); } return; }
+    const url = URL.createObjectURL(new Blob([text], { type: mime })), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+  function exportAs(kind) {
+    if (!LOCS.length) { toast('Nothing to export yet.'); return; }
+    return deliverText('aimmap-locations.' + kind, kind === 'gpx' ? locsToGpx(LOCS) : locsToCsv(LOCS), kind === 'gpx' ? 'application/gpx+xml' : 'text/csv');
+  }
+  $('impFile').addEventListener('change', async () => {
+    const f = $('impFile').files && $('impFile').files[0]; if (!f) return;
+    try {
+      const text = await f.text(), list = /<gpx[\s>]/i.test(text) ? gpxToLocs(text) : csvToLocs(text);
+      if (!list.length) { toast('No locations found in that file.'); return; }
+      LOCS = list.concat(LOCS); saveLocs(); touch(); if (!$('locs').hidden) renderLocs();
+      toast('Imported ' + list.length + ' location' + (list.length === 1 ? '' : 's') + '.');
+    } catch (e) { toast('That file could not be read.'); }
+  });
+
+  // ---- FOV cone style ----
+  function openFovStyle() {
+    const cols = [''].concat(ACCENTS, ['#ffffff', '#ff4d4d', '#a78bfa', '#b6f23c']);
+    sheet.innerHTML = '<h4>FOV cone style</h4><div class="swgrid">' + cols.map(c => '<button data-c="' + c + '" class="' + ((cfg.fovColor || '') === c ? 'sel' : '') + '" style="background:' + (c || cfg.accent) + '" aria-label="' + (c || 'Default') + '">' + (c ? '' : '<span class="auto">A</span>') + '</button>').join('') + '</div>' +
+      '<div class="numed"><label for="fvOp" style="color:var(--dim);font-size:13px">Opacity</label><input id="fvOp" type="range" min="10" max="80" step="1" value="' + Math.round(cfg.fovOpacity * 100) + '"><output id="fvOut" style="font:600 14px var(--mono);min-width:44px;text-align:right"></output></div>' +
+      '<button class="donebtn" id="fvDone">Done</button>';
+    sheetBg.hidden = false;
+    const out = () => { $('fvOut').textContent = Math.round(cfg.fovOpacity * 100) + '%'; }; out();
+    sheet.querySelectorAll('.swgrid button').forEach(b => b.addEventListener('click', () => {
+      cfg.fovColor = b.dataset.c || null; save(); touch();
+      sheet.querySelectorAll('.swgrid button').forEach(x => x.classList.toggle('sel', x === b));
+    }));
+    $('fvOp').addEventListener('input', () => { cfg.fovOpacity = +$('fvOp').value / 100; out(); touch(); });
+    $('fvOp').addEventListener('change', save);
+    $('fvDone').addEventListener('click', () => { save(); closeSheet(); });
+  }
+
+  // ---- direction lock ----
+  function setLock(b) {
+    S.lock = b == null ? null : ((b % 360) + 360) % 360;
+    $('btnLock').classList.toggle('on', S.lock != null); touch();
+  }
+  function updateLockBar() {
+    const bar = $('lockBar'), on = PRO.on && S.lock != null;
+    bar.hidden = !on; if (!on) return;
+    const d = S.heading == null ? 0 : sub(S.heading, S.lock), ad = Math.abs(d), ok = S.heading != null && ad <= 2;
+    $('lkTxt').textContent = fmtAngle(S.lock, cfg.angUnit);
+    $('lkMark').style.left = (50 + Math.max(-30, Math.min(30, d)) / 30 * 46) + '%';
+    bar.classList.toggle('ok', ok);
+    $('lkDev').textContent = S.heading == null ? '--' : ok ? 'On target' : (d > 0 ? '← ' : '→ ') + Math.round(ad) + '°';
+  }
+  function openBearing() {
+    const cur = S.lock != null ? Math.round(S.lock) : (S.heading != null ? Math.round(S.heading) : 0);
+    sheet.innerHTML = '<h4>Direction lock</h4><p class="numhint">Lock a bearing in degrees (0 is north, 90 is east). The camera view then shows how far you are from it.</p>' +
+      '<div class="numed"><button id="bMinus" aria-label="Decrease">−</button><input id="bIn" type="number" inputmode="decimal" min="0" max="359" step="1" value="' + cur + '"><button id="bPlus" aria-label="Increase">+</button></div>' +
+      '<div class="btnrow"><button class="sbtn" id="bHere">Use current heading</button><button class="sbtn danger" id="bOff">Unlock</button></div>' +
+      '<button class="donebtn" id="bGo">Lock</button>';
+    sheetBg.hidden = false;
+    const inp = $('bIn'), val = () => { let v = parseFloat(inp.value); if (isNaN(v)) v = 0; return ((v % 360) + 360) % 360; };
+    $('bMinus').addEventListener('click', () => { inp.value = Math.round(val() - 1 + 360) % 360; });
+    $('bPlus').addEventListener('click', () => { inp.value = Math.round(val() + 1) % 360; });
+    $('bHere').addEventListener('click', () => { if (S.heading == null) toast('No heading yet.'); else inp.value = Math.round(S.heading) % 360; });
+    $('bOff').addEventListener('click', () => { setLock(null); closeSheet(); toast('Direction unlocked.'); });
+    $('bGo').addEventListener('click', () => { setLock(val()); closeSheet(); toast('Direction locked at ' + fmtAngle(S.lock, cfg.angUnit) + '.'); });
+  }
+  $('btnSave').addEventListener('click', needPro(openSaveSheet));
+  $('btnLock').addEventListener('click', needPro(() => {
+    if (S.lock != null) { setLock(null); toast('Direction unlocked.'); }
+    else if (S.heading == null) toast('No heading yet.');
+    else { setLock(S.heading); toast('Direction locked at ' + fmtAngle(S.lock, cfg.angUnit) + '.'); }
+  }));
+  $('lockBar').addEventListener('click', () => { if (PRO.on) openBearing(); });
+  $('btnShot').addEventListener('click', needPro(() => geoShot()));
+
+  // ---- geo screenshot ----
+  function geoShot() {
+    const v = el.video;
+    if (!v.videoWidth) { toast('The camera is not ready yet.'); return; }
+    const w = v.videoWidth, h = v.videoHeight, c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    if (!S.hw && S.zoom > 1) { const sw = w / S.zoom, sh = h / S.zoom; g.drawImage(v, (w - sw) / 2, (h - sh) / 2, sw, sh, 0, 0, w, h); }
+    else g.drawImage(v, 0, 0, w, h);
+    const now = Date.now(), fov = Math.round(currentFov()), fs = Math.max(14, Math.round(Math.min(w, h) / 28)), pad = Math.round(fs * 0.8), lh = fs * 1.35;
+    const lines = [
+      'Bearing ' + (S.heading == null ? '--' : fmtAngle(S.heading, cfg.angUnit) + ' ' + cardinal(S.heading)) + '   Tilt ' + Math.round(S.pitch) + '°   FOV ' + fov + '°   Zoom ' + (Math.round(S.zoom * 10) / 10) + 'x',
+      S.lat == null ? 'Position unavailable' : S.lat.toFixed(5) + ', ' + S.lng.toFixed(5) + (S.alt != null ? '   Alt ' + S.alt + ' m' : '') + (S.acc ? '   ±' + Math.round(S.acc) + ' m' : ''),
+      fmtStamp(now)
+    ];
+    const bandH = pad * 2 + lines.length * lh;
+    g.fillStyle = 'rgba(0,0,0,.58)'; g.fillRect(0, h - bandH, w, bandH);
+    g.fillStyle = '#fff'; g.font = '600 ' + fs + 'px system-ui, sans-serif'; g.textBaseline = 'top';
+    const r = bandH * 0.4, cx = w - pad - r, cy = h - bandH / 2;
+    lines.forEach((t, i) => g.fillText(t, pad, h - bandH + pad + i * lh, cx - r - pad * 2));
+    if (S.heading != null) {
+      g.beginPath(); g.arc(cx, cy, r, 0, 7); g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = Math.max(2, fs / 9); g.stroke();
+      g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, r * 0.92, rad(S.heading - fov / 2 - 90), rad(S.heading + fov / 2 - 90)); g.closePath();
+      g.fillStyle = hexA((PRO.on && cfg.fovColor) || cfg.accent, 0.85); g.fill();
+      g.fillStyle = '#fff'; g.font = '700 ' + Math.round(fs * 0.7) + 'px system-ui, sans-serif'; g.textAlign = 'center'; g.fillText('N', cx, cy - r - fs * 0.8); g.textAlign = 'left';
+    }
+    const url = c.toDataURL('image/jpeg', 0.92), name = 'AimMap_' + stampName(now) + '.jpg', b64 = url.split(',')[1];
+    sheet.innerHTML = '<h4>Geo screenshot</h4><img class="shotimg" src="' + url + '" alt="Geo screenshot preview"><div class="btnrow"><button class="sbtn" id="gsShare">Share</button><button class="sbtn" id="gsDiscard">Discard</button></div><button class="donebtn" id="gsSave">Save</button>';
+    sheetBg.hidden = false;
+    $('gsDiscard').addEventListener('click', closeSheet);
+    $('gsSave').addEventListener('click', async () => {
+      try {
+        if (IS_NATIVE && N.files && N.files.saveImage) { const p = await N.files.saveImage(name, b64); toast('Saved to ' + p); }
+        else { const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); toast('Saved ' + name); }
+        closeSheet();
+      } catch (e) { toast('The photo could not be saved.'); }
+    });
+    $('gsShare').addEventListener('click', async () => {
+      try {
+        if (IS_NATIVE && N.files && N.files.shareImage) await N.files.shareImage(name, b64);
+        else if (navigator.share && navigator.canShare) {
+          const blob = await (await fetch(url)).blob(), file = new File([blob], name, { type: 'image/jpeg' });
+          if (navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: 'AimMap' }); else toast('Sharing is not supported here.');
+        } else toast('Sharing is not supported here.');
+      } catch (e) { /* dismissed */ }
+    });
+  }
+
+  // ---- Android back button ----
+  function handleBack() {
+    if (!sheetBg.hidden) { closeSheet(); return; }
+    if (!$('pro').hidden) { closePro(); return; }
+    if (!$('locs').hidden) { closeLocs(); return; }
+    if (!$('settings').hidden) { closeSettings(); return; }
+    if (!$('gate').hidden) return;
+    if (S.mode !== 'view') { setMode('view'); return; }
+    if (!$('zoomPop').hidden) { $('zoomPop').hidden = true; return; }
+    if (PRO.on) exitApp(); else openPro('exit');
+  }
+  if (IS_NATIVE && N.app && N.app.onBack) N.app.onBack(handleBack);
+
+  // ---------------- start ----------------
+  function go() { startCamera(); startGeo(); startOrientation(true); }
+  async function openAd() {
+    if (!IS_NATIVE || !N.ads) return;
+    await Promise.race([billingReady, new Promise(r => setTimeout(r, 2500))]);
+    if (PRO.on) return;
+    try { await N.ads.showInterstitial(); } catch (e) {}
+  }
+  async function begin() {
+    const needMotion = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+    if (!cfg.onboarded || needMotion) {
+      // First launch only (or iOS Safari, which asks for motion access every time): explain, then ask once.
+      $('gate').hidden = false;
+      $('gateBtn').addEventListener('click', async () => {
+        let ok = true;
+        if (needMotion) { ok = false; try { ok = (await DeviceOrientationEvent.requestPermission()) === 'granted'; } catch (e) {} }
+        $('gate').hidden = true; cfg.onboarded = true; save();
+        startCamera(); startGeo(); startOrientation(ok);
+      }, { once: true });
+    } else { go(); openAd(); }
+  }
+  applyTheme(); applyLayout(); setTiles(); syncLocate(); applyProUi();
+  initBilling();
+  window.addEventListener('resize', () => { resizeMap(); touch(); });
+  setTimeout(() => {
+    $('splash').classList.add('out'); setTimeout(() => { $('splash').hidden = true; }, 400);
+    begin();
+  }, 1600);
+})();
+</script>
+</body>
+</html>
