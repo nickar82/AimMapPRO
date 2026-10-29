@@ -45,6 +45,9 @@ jobs:
 
       - name: Create Android project
         run: npx cap add android
+      - name: Inspect Android application ID
+        run: |
+          grep -n -E 'applicationId|namespace|defaultConfig' android/app/build.gradle android/app/build.gradle.kts || true
 
       - name: Icon, splash, permissions, AdMob id, version
         run: |
