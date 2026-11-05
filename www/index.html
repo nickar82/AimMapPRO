@@ -358,6 +358,7 @@ input[type=range]{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--acc
       <div id="gpsWait" hidden>Waiting for GPS…</div>
       <div id="mapTop">
         <button class="mbtn" id="btnLayers" aria-label="Map type"><svg class="ic"><use href="#i-layers"/></svg></button>
+        <button class="mbtn" id="btnRot" aria-label="Map orientation: north up"><svg class="ic" id="rotIc"><use href="#i-compass"/></svg></button>
         <button class="mbtn" id="btnLocate" aria-label="Center on my position"><svg class="ic"><use href="#i-locate"/></svg></button>
       </div>
       <div id="mapBot">
@@ -633,7 +634,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
   const cfg = { baseFov: 67, offset: 0, facing: 'environment', crosshair: true, camInfo: true, mapType: 'osm',
                 showFov: true, showDir: true, showPos: true, distUnit: 'km', angUnit: 'deg', theme: 'dark',
                 accent: ACCENTS[0], swapped: false, split: 0.5, fovColor: null, fovOpacity: 0.42, onboarded: false,
-                showTicks: true, poiMap: true, poiCam: true };
+                showTicks: true, poiMap: true, poiCam: true, mapRot: false };
   try { Object.assign(cfg, JSON.parse(localStorage.getItem('aimmap') || '{}')); } catch (e) {}
   const save = () => { try { localStorage.setItem('aimmap', JSON.stringify(cfg)); } catch (e) {} };
 
@@ -699,18 +700,22 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
     if (reset) M.z = 16;
     dirty = true;
   }
+  // Heading-up mode: the map is turned so the direction the camera points is straight up (ROT = that heading in degrees).
+  let ROT = 0;
+  const rotFwd = (dx, dy) => { const a = rad(ROT), c = Math.cos(a), s = Math.sin(a); return [dx * c + dy * s, -dx * s + dy * c]; };   // map pixels -> screen pixels
+  const rotInv = (x, y) => { const a = rad(ROT), c = Math.cos(a), s = Math.sin(a); return [x * c - y * s, x * s + y * c]; };         // screen pixels -> map pixels
   const toScreen = (lat, lng) => {
-    const c = proj(M.lat, M.lng, M.z), p = proj(lat, lng, M.z);
-    return [M.w / 2 + p[0] - c[0], M.h / 2 + p[1] - c[1]];
+    const c = proj(M.lat, M.lng, M.z), p = proj(lat, lng, M.z), r = rotFwd(p[0] - c[0], p[1] - c[1]);
+    return [M.w / 2 + r[0], M.h / 2 + r[1]];
   };
   const fromScreen = (x, y) => {
-    const c = proj(M.lat, M.lng, M.z); return unproj(c[0] + x - M.w / 2, c[1] + y - M.h / 2, M.z);
+    const c = proj(M.lat, M.lng, M.z), r = rotInv(x - M.w / 2, y - M.h / 2); return unproj(c[0] + r[0], c[1] + r[1], M.z);
   };
   function zoomAbout(px, py, nz) {
     nz = Math.max(2, Math.min(19, nz));
     const g = fromScreen(px, py); M.z = nz;
-    const gp = proj(g[0], g[1], M.z);
-    const c = unproj(gp[0] - (px - M.w / 2), gp[1] - (py - M.h / 2), M.z);
+    const gp = proj(g[0], g[1], M.z), r = rotInv(px - M.w / 2, py - M.h / 2);
+    const c = unproj(gp[0] - r[0], gp[1] - r[1], M.z);
     M.lat = c[0]; M.lng = c[1]; dirty = true;
   }
   function unfollow() { if (S.follow) { S.follow = false; syncLocate(); } }
@@ -876,7 +881,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
   });
   // Distance marks along the center line of the cone ("1 km, 2 km, 5 km ..."), spaced for the current zoom.
   function drawTicks(O, hd, lat) {
-    const mpp = mPerPx(lat, M.z), step = tickStep(mpp, 80), a = rad(hd), sx = Math.sin(a), sy = -Math.cos(a);
+    const mpp = mPerPx(lat, M.z), step = tickStep(mpp, 80), a = rad(hd - ROT), sx = Math.sin(a), sy = -Math.cos(a);
     ctx.save(); ctx.font = '700 12px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
     for (let k = 1; k <= 14; k++) {
       const px = k * step / mpp, X = O[0] + px * sx, Y = O[1] + px * sy;
@@ -897,22 +902,28 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--mapbg').trim() || '#20262a';
     ctx.fillRect(0, 0, M.w, M.h);
     const z0 = Math.max(0, Math.min(def.max, Math.round(M.z))), sc = Math.pow(2, M.z - z0), n = Math.pow(2, z0);
-    const c0 = proj(M.lat, M.lng, z0), left = c0[0] - M.w / 2 / sc, top = c0[1] - M.h / 2 / sc;
-    const tx0 = Math.floor(left / 256), tx1 = Math.floor((left + M.w / sc) / 256);
-    const ty0 = Math.floor(top / 256), ty1 = Math.floor((top + M.h / sc) / 256);
+    ROT = cfg.mapRot && S.heading != null ? S.heading : 0;
+    // Tiles are drawn around the map center; when the map is turned they must cover the whole rotated view.
+    const half = ROT ? Math.hypot(M.w, M.h) / 2 : 0, hw = Math.max(M.w / 2, half), hh = Math.max(M.h / 2, half);
+    const c0 = proj(M.lat, M.lng, z0), left = c0[0] - hw / sc, top = c0[1] - hh / sc;
+    const tx0 = Math.floor(left / 256), tx1 = Math.floor((left + 2 * hw / sc) / 256);
+    const ty0 = Math.floor(top / 256), ty1 = Math.floor((top + 2 * hh / sc) / 256);
+    ctx.save(); ctx.translate(M.w / 2, M.h / 2); if (ROT) ctx.rotate(-rad(ROT));
     for (let ty = Math.max(0, ty0); ty <= Math.min(n - 1, ty1); ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const wx = ((tx % n) + n) % n, t = tileImg(def, z0, wx, ty);
-        const sx = (tx * 256 - left) * sc, sy = (ty * 256 - top) * sc, sz = 256 * sc + 0.6;
+        const sx = (tx * 256 - c0[0]) * sc, sy = (ty * 256 - c0[1]) * sc, sz = 256 * sc + 0.6;
         if (t._ok) ctx.drawImage(t, sx, sy, sz, sz);
       }
     }
+    ctx.restore();
     // The cone is a true angle: its edges run on to the border of the map at any zoom and fade with distance.
     const reach = (P, hd) => {
       const inside = P[0] >= 0 && P[0] <= M.w && P[1] >= 0 && P[1] <= M.h;
       return inside ? Math.max(80, rayLen(P[0], P[1], hd, M.w, M.h)) : Math.hypot(M.w, M.h) + Math.hypot(P[0] - M.w / 2, P[1] - M.h / 2);
     };
     const wedge = (P, hd, fv, col, o) => {
+      hd -= ROT;
       const R = Math.hypot(M.w, M.h) + Math.hypot(P[0] - M.w / 2, P[1] - M.h / 2) + 20, Lg = reach(P, hd), n = 28;
       ctx.beginPath(); ctx.moveTo(P[0], P[1]);
       for (let i = 0; i <= n; i++) { const a = rad(hd - fv / 2 + fv * i / n); ctx.lineTo(P[0] + R * Math.sin(a), P[1] - R * Math.cos(a)); }
@@ -925,6 +936,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
       ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.strokeStyle = gs; ctx.stroke();
     };
     const ray = (P, hd, col, dash, w, fade) => {
+      hd -= ROT;
       const a = rad(hd), R = Math.hypot(M.w, M.h) + Math.hypot(P[0] - M.w / 2, P[1] - M.h / 2) + 20;
       ctx.save(); ctx.setLineDash(dash); ctx.lineWidth = w || 2.5;
       if (fade) { const g = ctx.createRadialGradient(P[0], P[1], 0, P[0], P[1], reach(P, hd)); g.addColorStop(0, hexA(col, 1)); g.addColorStop(1, hexA(col, 0.45)); ctx.strokeStyle = g; }
@@ -979,7 +991,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
     if (!ptrs.has(e.pointerId)) return;
     const prev = ptrs.get(e.pointerId), cur = [e.offsetX, e.offsetY];
     if (ptrs.size === 1) {
-      const c = proj(M.lat, M.lng, M.z), nc = unproj(c[0] - (cur[0] - prev[0]), c[1] - (cur[1] - prev[1]), M.z);
+      const c = proj(M.lat, M.lng, M.z), dm = rotInv(cur[0] - prev[0], cur[1] - prev[1]), nc = unproj(c[0] - dm[0], c[1] - dm[1], M.z);
       M.lat = nc[0]; M.lng = nc[1]; unfollow(); dirty = true;
     } else if (ptrs.size === 2) {
       const other = [...ptrs.entries()].find(([id]) => id !== e.pointerId)[1];
@@ -996,6 +1008,15 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
   const stepZoom = d => { zoomAbout(M.w / 2, M.h / 2, Math.round(M.z) + d); };
   $('btnZin').addEventListener('click', () => stepZoom(1));
   $('btnZout').addEventListener('click', () => stepZoom(-1));
+  $('btnRot').addEventListener('click', () => {
+    cfg.mapRot = !cfg.mapRot; save(); dirty = true; syncRot(); toast(cfg.mapRot ? 'Heading up: the cone points up' : 'North up');
+    if (!$('settings').hidden) buildSettings();
+  });
+  function syncRot() {
+    $('btnRot').classList.toggle('on', !!cfg.mapRot);
+    $('btnRot').setAttribute('aria-label', cfg.mapRot ? 'Map orientation: heading up' : 'Map orientation: north up');
+    $('rotIc').style.transform = 'rotate(' + (-ROT) + 'deg)';
+  }
   $('btnLocate').addEventListener('click', () => {
     if (S.lat == null) { toast('Still waiting for a GPS position.'); return; }
     S.follow = true; S.focus = null; syncLocate(); fitCone(false);
@@ -1021,7 +1042,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
     $('gpsWait').hidden = S.lat != null;
     updateLockBar();
   }
-  (function loop() { if (dirty) { dirty = false; updateHud(); drawMap(); drawAr(); } requestAnimationFrame(loop); })();
+  (function loop() { if (dirty) { dirty = false; updateHud(); drawMap(); syncRot(); drawAr(); } requestAnimationFrame(loop); })();
   const touch = () => { dirty = true; };
 
   // ---------------- heading ----------------
@@ -1305,6 +1326,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
       { t: 'pick', k: 'mapType', label: 'Map type', opts: Object.keys(TILES).map(k => [k, TILES[k].name]), after: setTiles },
       { t: 'tog', k: 'showFov', label: 'Show field of view (FOV)' },
       { t: 'tog', k: 'showDir', label: 'Show direction line' },
+      { t: 'tog', k: 'mapRot', label: 'Rotate map with heading (cone points up)', after: () => { syncRot(); dirty = true; } },
       { t: 'tog', k: 'showTicks', label: 'Show distance marks' },
       { t: 'tog', k: 'poiMap', label: 'Show place names on the map' },
       { t: 'tog', k: 'showPos', label: 'Show my position' }] },
@@ -1334,7 +1356,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
     b.querySelectorAll('[data-row]').forEach(n => {
       const [si, ri] = n.dataset.row.slice(1).split('_').map(Number), r = SECTIONS[si].rows[ri];
       n.addEventListener('click', () => {
-        if (r.t === 'tog') { cfg[r.k] = !cfg[r.k]; save(); touch(); buildSettings(); }
+        if (r.t === 'tog') { cfg[r.k] = !cfg[r.k]; save(); touch(); if (r.after) r.after(); buildSettings(); }
         else if (r.t === 'pick') openPick(r);
         else if (r.t === 'num') openNum(r);
         else if (r.t === 'color') openColor(r);
@@ -1679,7 +1701,7 @@ function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] |
       }, { once: true });
     } else { go(); startupFlow(); }
   }
-  applyTheme(); applyLayout(); setTiles(); syncLocate(); applyProUi();
+  applyTheme(); applyLayout(); setTiles(); syncLocate(); syncRot(); applyProUi();
   initBilling();
   window.addEventListener('resize', () => { resizeMap(); touch(); });
   setTimeout(() => {
