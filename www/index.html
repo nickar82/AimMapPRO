@@ -232,6 +232,22 @@ input[type=range]{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--acc
 .prorow .pl{display:flex;flex-direction:column;flex:1;min-width:0}
 .prorow .pl small{color:var(--dim);font-size:12.5px;line-height:1.25}
 
+/* compass calibration */
+#calib{position:fixed;inset:0;z-index:850;background:rgba(6,8,10,.94);color:#f1f3f4;display:flex;align-items:center;justify-content:center;padding:24px}
+#calib .cb{width:100%;max-width:360px;background:#16191c;border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:22px 20px 18px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
+#calib h1{margin:0;font-size:22px;font-weight:800}
+#calib svg.fig{width:220px;height:120px;overflow:visible}
+#calib .path{fill:none;stroke:rgba(255,255,255,.22);stroke-width:3;stroke-linecap:round}
+#calib .ph{fill:var(--accent)}
+#calib p{margin:0;color:#c4cbd0;font-size:15px;line-height:1.35}
+#calib .bar{width:100%;height:8px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden}
+#calib .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+#calib.done .bar i{background:var(--ok,#46d39a)}
+#calib button{width:100%;margin-top:4px;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);padding:14px;font-weight:800;font-size:17px}
+@media (orientation:landscape){#calib .cb{max-width:520px;flex-direction:row;flex-wrap:wrap;justify-content:center;padding:14px 18px}#calib svg.fig{width:170px;height:92px}#calib .cb>*{flex:0 0 auto}#calib h1{width:100%}#calib button{width:auto;min-width:160px}}
+/* place names on the camera */
+#arCv{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+
 /* landscape: panes side by side, nav on the right as a rail */
 @media (orientation:landscape){
   #app{flex-direction:row}
@@ -307,6 +323,7 @@ input[type=range]{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--acc
   <div id="stage">
     <section class="pane" id="camPane" aria-label="Camera">
       <video id="video" playsinline muted autoplay></video>
+      <canvas id="arCv" aria-hidden="true"></canvas>
       <div id="noCam">Camera is off</div>
       <div id="cross" aria-hidden="true"></div>
       <div id="infoPill">
@@ -379,6 +396,20 @@ input[type=range]{flex:1;min-width:0;height:30px;margin:0;accent-color:var(--acc
     <p>AimMap needs the camera, your location and the motion sensors to show where the camera is pointing.</p>
     <p>You are asked only once. After that AimMap opens straight away.</p>
     <button id="gateBtn">Continue</button>
+  </div>
+</div>
+
+<div id="calib" hidden role="dialog" aria-label="Calibrate Compass">
+  <div class="cb">
+    <h1>Calibrate Compass</h1>
+    <svg class="fig" viewBox="0 0 220 120" aria-hidden="true">
+      <path id="calPath" class="path" d="M110 60 C 140 10, 205 10, 205 60 C 205 110, 140 110, 110 60 C 80 10, 15 10, 15 60 C 15 110, 80 110, 110 60 Z"/>
+      <g class="ph"><rect x="-9" y="-15" width="18" height="30" rx="4"/>
+        <animateMotion dur="3.6s" repeatCount="indefinite" rotate="auto"><mpath href="#calPath"/></animateMotion></g>
+    </svg>
+    <p id="calMsg">Keep moving until calibration is complete.</p>
+    <div class="bar"><i id="calBar"></i></div>
+    <button id="calOk">OK</button>
   </div>
 </div>
 
@@ -549,6 +580,44 @@ function gpxToLocs(text) {
   }
   return out;
 }
+// ---- distance, bearing, rays, labels ----
+function distM(lat1, lng1, lat2, lng2) {
+  const R = 6371008.8, p1 = rad(lat1), p2 = rad(lat2), dp = p2 - p1, dl = rad(lng2 - lng1);
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function bearingTo(lat1, lng1, lat2, lng2) {
+  const p1 = rad(lat1), p2 = rad(lat2), dl = rad(lng2 - lng1);
+  return (deg(Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl))) + 360) % 360;
+}
+// Length of a ray from (x, y) along a compass bearing until it leaves the w x h rectangle.
+function rayLen(x, y, hd, w, h) {
+  const dx = Math.sin(rad(hd)), dy = -Math.cos(rad(hd)); let t = Infinity;
+  if (dx > 1e-9) t = Math.min(t, (w - x) / dx); else if (dx < -1e-9) t = Math.min(t, -x / dx);
+  if (dy > 1e-9) t = Math.min(t, (h - y) / dy); else if (dy < -1e-9) t = Math.min(t, -y / dy);
+  return Math.max(0, t);
+}
+// Spacing (meters) of the distance marks along the center line: 1-2-5 steps, at least minPx apart.
+function tickStep(mpp, minPx) {
+  const need = mpp * minPx; let p = Math.pow(10, Math.floor(Math.log10(need)));
+  for (const s of [1, 2, 5, 10]) if (s * p >= need) return s * p;
+  return 10 * p;
+}
+function fmtDist(m, unit) {
+  if (unit === 'mi') { const mi = m / 1609.344; return mi >= 0.5 ? (Math.round(mi * 10) / 10) + ' mi' : Math.round(m / 0.3048 / 10) * 10 + ' ft'; }
+  return m >= 1000 ? (Math.round(m / 100) / 10) + ' km' : Math.round(m) + ' m';
+}
+// Angle above the horizon (degrees) of a point at distance d (m) and height dh (m) relative to the eye, with earth curvature and refraction.
+function elevAngle(d, dh) { return deg(Math.atan2(dh - (d * d) / (2 * 6371008.8) * 0.87, d)); }
+// Screen position of a direction (heading/elevation, degrees) for a camera looking at (hd, pitch) with horizontal FOV hf, in a w x h pane.
+function projectLabel(hd, el, camHd, camPitch, hf, w, h) {
+  const dx = angDiff(hd, camHd), dy = el - camPitch;
+  if (Math.abs(dx) >= 89 || Math.abs(dy) >= 89) return null;
+  const f = (w / 2) / Math.tan(rad(hf) / 2);
+  return [w / 2 + f * Math.tan(rad(dx)), h / 2 - f * Math.tan(rad(dy))];
+}
+// Best display name for the device language: name:<lang>, then English, then the local name.
+function pickName(tags, lang) { return tags['name:' + lang] || tags['name:en'] || tags.name || ''; }
 // </core>
 
 (() => {
@@ -563,7 +632,8 @@ function gpxToLocs(text) {
   };
   const cfg = { baseFov: 67, offset: 0, facing: 'environment', crosshair: true, camInfo: true, mapType: 'osm',
                 showFov: true, showDir: true, showPos: true, distUnit: 'km', angUnit: 'deg', theme: 'dark',
-                accent: ACCENTS[0], swapped: false, split: 0.5, fovColor: null, fovOpacity: 0.42, onboarded: false };
+                accent: ACCENTS[0], swapped: false, split: 0.5, fovColor: null, fovOpacity: 0.42, onboarded: false,
+                showTicks: true, poiMap: true, poiCam: true };
   try { Object.assign(cfg, JSON.parse(localStorage.getItem('aimmap') || '{}')); } catch (e) {}
   const save = () => { try { localStorage.setItem('aimmap', JSON.stringify(cfg)); } catch (e) {} };
 
@@ -623,7 +693,6 @@ function gpxToLocs(text) {
     dirty = true;
   }
   new ResizeObserver(resizeMap).observe(el.mapPane);
-  // Map zoom is independent of the cone: the cone keeps a fixed length on screen.
   function fitCone(reset) {
     if (!M.w) return;
     M.lat = S.lat != null ? S.lat : M.lat; M.lng = S.lng != null ? S.lng : M.lng;
@@ -658,6 +727,169 @@ function gpxToLocs(text) {
     } else { cache.delete(key); cache.set(key, t); }
     return t;
   }
+  // ---------------- place names (OpenStreetMap data via the Overpass API) ----------------
+  const LANG = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').split('-')[0].toLowerCase();
+  const POI = { cells: new Map(), busy: false, retry: {}, list: [] };
+  const POI_KEY = 'aimmap_poi3_' + LANG, OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  const cellKey = (la, ln) => (Math.round(la * 4) / 4).toFixed(2) + ',' + (Math.round(ln * 4) / 4).toFixed(2);
+  function poiRebuild() {
+    const seen = new Map(); POI.cells.forEach(c => c.items.forEach(it => seen.set(it[0], it)));
+    POI.list = [...seen.values()]; dirty = true;
+  }
+  function poiPersist() {
+    try {
+      const keys = [...POI.cells.keys()].sort((a, b) => POI.cells.get(b).t - POI.cells.get(a).t).slice(0, 8), o = {};
+      keys.forEach(k => { o[k] = POI.cells.get(k); }); localStorage.setItem(POI_KEY, JSON.stringify(o));
+    } catch (e) {}
+  }
+  try {
+    const o = JSON.parse(localStorage.getItem(POI_KEY) || '{}');
+    Object.keys(o).forEach(k => { if (o[k] && Array.isArray(o[k].items) && Date.now() - o[k].t < 30 * 864e5) POI.cells.set(k, o[k]); });
+    poiRebuild();
+  } catch (e) {}
+  function poiQuery(la, ln) {
+    const a = (r, f) => f + '(around:' + r + ',' + la + ',' + ln + ');';
+    return '[out:json][timeout:40];(' +
+      a(30000, 'node["natural"="peak"]["name"]') + a(120000, 'node["natural"="peak"]["name"]["ele"~"^[1-9][0-9]{3}"]') +
+      a(30000, 'node["place"~"^(village|town|city)$"]["name"]') + a(120000, 'node["place"~"^(town|city)$"]["name"]') + ');out body qt 2500;';
+  }
+  function poiParse(json) {
+    const out = [];
+    ((json && json.elements) || []).forEach(n => {
+      const t = n.tags || {}; if (n.lat == null || n.lon == null) return;
+      const name = pickName(t, LANG); if (!name) return;
+      const ty = t.natural === 'peak' ? 'p' : t.place === 'city' ? 'c' : t.place === 'town' ? 't' : t.place === 'village' ? 'v' : null; if (!ty) return;
+      const ele = parseFloat(t.ele);
+      out.push([n.id, n.lat, n.lon, ty, name, isFinite(ele) ? ele : null]);
+    });
+    return out;
+  }
+  async function poiFetch(key) {
+    const [la, ln] = key.split(',').map(Number);
+    for (const url of OVERPASS) {
+      try {
+        const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 45000);
+        const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(poiQuery(la, ln)), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+        clearTimeout(to);
+        if (!r.ok) continue;
+        return poiParse(await r.json());
+      } catch (e) { /* try the next server */ }
+    }
+    return null;
+  }
+  async function poiEnsure(la, ln) {
+    const key = cellKey(la, ln);
+    if (POI.cells.has(key) || POI.busy || (POI.retry[key] || 0) > Date.now()) return;
+    POI.busy = true;
+    const items = await poiFetch(key);
+    POI.busy = false;
+    if (items) { POI.cells.set(key, { t: Date.now(), items }); poiPersist(); poiRebuild(); }
+    else POI.retry[key] = Date.now() + 60000;
+  }
+  setInterval(() => {
+    if (!cfg.poiMap && !cfg.poiCam) return;
+    if (S.lat != null && !document.hidden) { poiEnsure(S.lat, S.lng); if (!POI.busy && cfg.poiMap && M.z >= 8) poiEnsure(M.lat, M.lng); }
+  }, 2000);
+  const fmtElev = e => cfg.distUnit === 'mi' ? Math.round(e / 0.3048) + ' ft' : Math.round(e) + ' m';
+  const poiWeight = it => it[3] === 'c' ? 6 : it[3] === 't' ? 3.5 : it[3] === 'p' ? 2 + (it[5] || 0) / 700 : 1.2;
+  function drawPoiMap() {
+    if (!cfg.poiMap || !POI.list.length) return;
+    const found = [];
+    for (const it of POI.list) {
+      const ty = it[3], minZ = ty === 'c' ? 5 : ty === 't' ? 8 : ty === 'v' ? 11 : (it[5] != null && it[5] >= 1500 ? 8 : 10);
+      if (M.z < minZ) continue;
+      const Q = toScreen(it[1], it[2]);
+      if (Q[0] < -10 || Q[1] < -10 || Q[0] > M.w + 10 || Q[1] > M.h + 10) continue;
+      found.push([it, Q]);
+    }
+    found.sort((a, b) => poiWeight(b[0]) - poiWeight(a[0]));
+    ctx.save(); ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    const boxes = []; let n = 0;
+    for (const [it, Q] of found) {
+      if (n >= 70) break;
+      const big = it[3] === 'c', txt = it[4] + (it[3] === 'p' && it[5] != null && M.z >= 10 ? ' · ' + fmtElev(it[5]) : '');
+      ctx.font = (big ? '700 14px' : '600 12px') + ' system-ui, sans-serif';
+      const w = ctx.measureText(txt).width, b = [Q[0] + 8, Q[1] - 8, Q[0] + 12 + w, Q[1] + 8];
+      if (b[2] > M.w - 4 || b[0] < 2 || b[1] < 2 || b[3] > M.h - 20) continue;
+      if (boxes.some(o => b[0] < o[2] + 3 && b[2] > o[0] - 3 && b[1] < o[3] + 2 && b[3] > o[1] - 2)) continue;
+      boxes.push(b); n++;
+      ctx.beginPath();
+      if (it[3] === 'p') { ctx.moveTo(Q[0], Q[1] - 6); ctx.lineTo(Q[0] + 6, Q[1] + 4); ctx.lineTo(Q[0] - 6, Q[1] + 4); ctx.closePath(); ctx.fillStyle = '#c9772b'; }
+      else { ctx.arc(Q[0], Q[1], big ? 5 : 3.5, 0, 7); ctx.fillStyle = '#e8eef2'; }
+      ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0,0,0,.75)'; ctx.stroke();
+      ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.strokeText(txt, Q[0] + 11, Q[1]); ctx.fillStyle = '#fff'; ctx.fillText(txt, Q[0] + 11, Q[1]);
+    }
+    ctx.restore();
+  }
+  // ---- place names on the camera ----
+  const ar = $('arCv'), arx = ar.getContext('2d'); let arHits = [];
+  function drawAr() {
+    const w = el.cam.clientWidth, h = el.cam.clientHeight; if (!w || !h) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    if (ar.width !== Math.round(w * dpr) || ar.height !== Math.round(h * dpr)) { ar.width = Math.round(w * dpr); ar.height = Math.round(h * dpr); }
+    arx.setTransform(dpr, 0, 0, dpr, 0, 0); arx.clearRect(0, 0, w, h); arHits = [];
+    if (!cfg.poiCam || S.lat == null || S.heading == null || !POI.list.length || !$('noCam').hidden) return;
+    const hf = currentFov(), eye = S.alt != null ? S.alt : 0, maxD = { c: 120000, t: 60000, p: 120000, v: 20000 }, cand = [];
+    for (const it of POI.list) {
+      const d = distM(S.lat, S.lng, it[1], it[2]); if (d < 150 || d > maxD[it[3]]) continue;
+      if (it[3] === 'p' && d > 30000 && (it[5] == null || it[5] < 1000)) continue;
+      const b = bearingTo(S.lat, S.lng, it[1], it[2]); if (Math.abs(angDiff(b, S.heading)) > hf / 2 + 8) continue;
+      const P = projectLabel(b, elevAngle(d, (it[5] != null ? it[5] : eye) - eye), S.heading, S.pitch, hf, w, h);
+      if (!P || P[0] < -30 || P[0] > w + 30 || P[1] < -20 || P[1] > h + 20) continue;
+      cand.push({ it, d, b, P, s: poiWeight(it) / (1 + d / 20000) });
+    }
+    cand.sort((a, b) => b.s - a.s);
+    arx.textBaseline = 'middle'; arx.textAlign = 'left';
+    const boxes = []; let n = 0;
+    for (const c of cand) {
+      if (n >= 12) break;
+      const it = c.it, t1 = it[4], t2 = (it[3] === 'p' && it[5] != null ? '▲ ' + fmtElev(it[5]) + ' · ' : '') + fmtDist(c.d, cfg.distUnit);
+      arx.font = '700 14px system-ui, sans-serif'; const w1 = arx.measureText(t1).width;
+      arx.font = '600 11px system-ui, sans-serif'; const w2 = arx.measureText(t2).width;
+      const bw = Math.min(w - 8, Math.max(w1, w2) + 18), bh = 38;
+      const bx = Math.max(4, Math.min(w - bw - 4, c.P[0] - bw / 2)), by = Math.max(4, c.P[1] - 12 - bh), b = [bx, by, bx + bw, by + bh];
+      if (boxes.some(o => b[0] < o[2] + 4 && b[2] > o[0] - 4 && b[1] < o[3] + 4 && b[3] > o[1] - 4)) continue;
+      boxes.push(b); n++; arHits.push({ b, c });
+      arx.beginPath(); arx.moveTo(c.P[0], c.P[1]); arx.lineTo(c.P[0], Math.min(by + bh, c.P[1])); arx.lineWidth = 1.5; arx.strokeStyle = 'rgba(255,255,255,.8)'; arx.stroke();
+      arx.beginPath(); arx.arc(c.P[0], c.P[1], 4, 0, 7); arx.fillStyle = cfg.accent; arx.fill(); arx.lineWidth = 1.5; arx.strokeStyle = '#fff'; arx.stroke();
+      arx.fillStyle = 'rgba(8,10,12,.62)'; arx.beginPath(); if (arx.roundRect) arx.roundRect(bx, by, bw, bh, 10); else arx.rect(bx, by, bw, bh); arx.fill();
+      arx.fillStyle = '#fff'; arx.font = '700 14px system-ui, sans-serif'; arx.fillText(t1, bx + 9, by + 14, bw - 14);
+      arx.fillStyle = '#c9d1d6'; arx.font = '600 11px system-ui, sans-serif'; arx.fillText(t2, bx + 9, by + 29, bw - 14);
+    }
+  }
+  ar.addEventListener('click', e => {
+    const r = ar.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const hit = arHits.find(o => x >= o.b[0] && x <= o.b[2] && y >= o.b[1] && y <= o.b[3]); if (!hit) return;
+    const it = hit.c.it, kind = { c: 'City', t: 'Town', v: 'Village', p: 'Peak' }[it[3]];
+    sheet.innerHTML = '<h4>' + esc(it[4]) + '</h4><p class="numhint">' + kind + ' · ' + fmtDist(hit.c.d, cfg.distUnit) + ' away · bearing ' + fmtAngle(hit.c.b, cfg.angUnit) + ' ' + cardinal(hit.c.b) + (it[5] != null ? ' · ' + fmtElev(it[5]) : '') + '</p>' +
+      '<p class="numhint">If the name is not on the real place, point the crosshair exactly at it and tap Align. The compass correction is adjusted so the two match.</p>' +
+      '<div class="btnrow"><button class="sbtn" id="poiClose">Close</button></div><button class="donebtn" id="poiAlign">Align compass to this place</button>';
+    sheetBg.hidden = false;
+    $('poiClose').addEventListener('click', closeSheet);
+    $('poiAlign').addEventListener('click', () => {
+      if (S.heading == null) return;
+      const nb = bearingTo(S.lat, S.lng, it[1], it[2]), d = angDiff(nb, S.heading);
+      cfg.offset = Math.round(angDiff(cfg.offset + d, 0)); save();
+      S.heading = (S.heading + d + 360) % 360; S.hs = Math.sin(rad(S.heading)); S.hc = Math.cos(rad(S.heading));
+      closeSheet(); toast('Compass correction set to ' + cfg.offset + '°'); touch();
+    });
+  });
+  // Distance marks along the center line of the cone ("1 km, 2 km, 5 km ..."), spaced for the current zoom.
+  function drawTicks(O, hd, lat) {
+    const mpp = mPerPx(lat, M.z), step = tickStep(mpp, 80), a = rad(hd), sx = Math.sin(a), sy = -Math.cos(a);
+    ctx.save(); ctx.font = '700 12px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    for (let k = 1; k <= 14; k++) {
+      const px = k * step / mpp, X = O[0] + px * sx, Y = O[1] + px * sy;
+      if (X < -10 || Y < -10 || X > M.w + 10 || Y > M.h + 10) { if (px > Math.hypot(M.w, M.h) * 2) break; continue; }
+      const nx = -sy, ny = sx;   // perpendicular to the line
+      ctx.beginPath(); ctx.moveTo(X - nx * 7, Y - ny * 7); ctx.lineTo(X + nx * 7, Y + ny * 7);
+      ctx.lineWidth = 4.5; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.stroke(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+      const t = fmtDist(k * step, cfg.distUnit), lx = X + nx * 12 + (nx < 0 ? -ctx.measureText(t).width : 0), ly = Y + ny * 12;
+      if (lx < 2 || lx + ctx.measureText(t).width > M.w - 2 || ly < 8 || ly > M.h - 18) continue;
+      ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.strokeText(t, lx, ly); ctx.fillStyle = '#fff'; ctx.fillText(t, lx, ly);
+    }
+    ctx.restore();
+  }
   function drawMap() {
     if (!M.w) return;
     const def = TILES[cfg.mapType] || TILES.osm;
@@ -675,20 +907,29 @@ function gpxToLocs(text) {
         if (t._ok) ctx.drawImage(t, sx, sy, sz, sz);
       }
     }
-    // The cone has a fixed length on screen, whatever the map zoom is.
-    const L = Math.min(M.w, M.h) * 0.42;
-    const wedge = (P, hd, fv, col, o) => {
-      const n = 28; ctx.beginPath(); ctx.moveTo(P[0], P[1]);
-      for (let i = 0; i <= n; i++) { const a = rad(hd - fv / 2 + fv * i / n); ctx.lineTo(P[0] + L * Math.sin(a), P[1] - L * Math.cos(a)); }
-      ctx.closePath();
-      const g = ctx.createRadialGradient(P[0], P[1], 0, P[0], P[1], L);
-      g.addColorStop(0, hexA(col, o * 0.3)); g.addColorStop(1, hexA(col, o));
-      ctx.fillStyle = g; ctx.fill();
-      ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.strokeStyle = col; ctx.stroke();
+    // The cone is a true angle: its edges run on to the border of the map at any zoom and fade with distance.
+    const reach = (P, hd) => {
+      const inside = P[0] >= 0 && P[0] <= M.w && P[1] >= 0 && P[1] <= M.h;
+      return inside ? Math.max(80, rayLen(P[0], P[1], hd, M.w, M.h)) : Math.hypot(M.w, M.h) + Math.hypot(P[0] - M.w / 2, P[1] - M.h / 2);
     };
-    const ray = (P, hd, col, dash, w) => {
-      const a = rad(hd); ctx.save(); ctx.setLineDash(dash); ctx.lineWidth = w || 2.5; ctx.strokeStyle = col;
-      ctx.beginPath(); ctx.moveTo(P[0], P[1]); ctx.lineTo(P[0] + L * Math.sin(a), P[1] - L * Math.cos(a)); ctx.stroke(); ctx.restore();
+    const wedge = (P, hd, fv, col, o) => {
+      const R = Math.hypot(M.w, M.h) + Math.hypot(P[0] - M.w / 2, P[1] - M.h / 2) + 20, Lg = reach(P, hd), n = 28;
+      ctx.beginPath(); ctx.moveTo(P[0], P[1]);
+      for (let i = 0; i <= n; i++) { const a = rad(hd - fv / 2 + fv * i / n); ctx.lineTo(P[0] + R * Math.sin(a), P[1] - R * Math.cos(a)); }
+      ctx.closePath();
+      const g = ctx.createRadialGradient(P[0], P[1], 0, P[0], P[1], Lg);
+      g.addColorStop(0, hexA(col, o * 0.6)); g.addColorStop(1, hexA(col, o * 0.2));
+      ctx.fillStyle = g; ctx.fill();
+      const gs = ctx.createRadialGradient(P[0], P[1], 0, P[0], P[1], Lg);
+      gs.addColorStop(0, hexA(col, 1)); gs.addColorStop(1, hexA(col, 0.4));
+      ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.strokeStyle = gs; ctx.stroke();
+    };
+    const ray = (P, hd, col, dash, w, fade) => {
+      const a = rad(hd), R = Math.hypot(M.w, M.h) + Math.hypot(P[0] - M.w / 2, P[1] - M.h / 2) + 20;
+      ctx.save(); ctx.setLineDash(dash); ctx.lineWidth = w || 2.5;
+      if (fade) { const g = ctx.createRadialGradient(P[0], P[1], 0, P[0], P[1], reach(P, hd)); g.addColorStop(0, hexA(col, 1)); g.addColorStop(1, hexA(col, 0.45)); ctx.strokeStyle = g; }
+      else ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.moveTo(P[0], P[1]); ctx.lineTo(P[0] + R * Math.sin(a), P[1] - R * Math.cos(a)); ctx.stroke(); ctx.restore();
     };
     if (PRO.on) {
       const foc = S.focus && LOCS.find(x => x.id === S.focus);
@@ -706,7 +947,10 @@ function gpxToLocs(text) {
       const O = toScreen(lat, lng);
       const color = (PRO.on && cfg.fovColor) || cfg.accent, op = PRO.on ? cfg.fovOpacity : 0.42;
       if (cfg.showFov && S.heading != null) wedge(O, S.heading, currentFov(), color, op);
-      if (cfg.showDir && S.heading != null) ray(O, S.heading, color, [9, 7]);
+      if (cfg.showDir && S.heading != null) {
+        ray(O, S.heading, color, [9, 7], 2.5, true);
+        if (cfg.showTicks) drawTicks(O, S.heading, lat);
+      }
       if (PRO.on && S.lock != null) { ray(O, S.lock, 'rgba(0,0,0,.45)', [3, 6], 5); ray(O, S.lock, '#ffffff', [3, 6], 2.5); }
       if (cfg.showPos) {
         const accPx = S.acc ? S.acc / mPerPx(lat, M.z) : 0;
@@ -715,6 +959,7 @@ function gpxToLocs(text) {
         ctx.beginPath(); ctx.arc(O[0], O[1], 8, 0, 7); ctx.fillStyle = '#2f7df6'; ctx.fill();
       }
     }
+    drawPoiMap();
     // scale bar
     const mpp = mPerPx(M.lat, M.z), ns = niceScale(mpp * 90, cfg.distUnit);
     $('scaleBar').style.width = Math.round(ns.meters / mpp) + 'px'; $('scaleLbl').textContent = ns.label;
@@ -776,7 +1021,7 @@ function gpxToLocs(text) {
     $('gpsWait').hidden = S.lat != null;
     updateLockBar();
   }
-  (function loop() { if (dirty) { dirty = false; updateHud(); drawMap(); } requestAnimationFrame(loop); })();
+  (function loop() { if (dirty) { dirty = false; updateHud(); drawMap(); drawAr(); } requestAnimationFrame(loop); })();
   const touch = () => { dirty = true; };
 
   // ---------------- heading ----------------
@@ -786,8 +1031,51 @@ function gpxToLocs(text) {
     else { S.hs += (Math.sin(a) - S.hs) * 0.2; S.hc += (Math.cos(a) - S.hc) * 0.2; }
     S.heading = (deg(Math.atan2(S.hs, S.hc)) + 360) % 360; touch();
   }
+  // ---- compass calibration ----
+  const CAL = { active: false, prog: 0, last: null, resolve: null, p: null, shown: 0 };
+  const POOR = { flag: false, jumps: [], bad: 0, last: null };
+  function showCalib() {
+    if (CAL.active) return CAL.p;
+    CAL.active = true; CAL.prog = 0; CAL.last = null; CAL.shown = Date.now(); POOR.jumps = []; POOR.bad = 0;
+    $('calib').hidden = false; $('calib').classList.remove('done');
+    $('calMsg').textContent = 'Keep moving until calibration is complete.'; $('calBar').style.width = '0%';
+    CAL.p = new Promise(r => { CAL.resolve = r; });
+    return CAL.p;
+  }
+  function closeCalib() {
+    if (!CAL.active) return;
+    CAL.active = false; $('calib').hidden = true; POOR.flag = false; POOR.jumps = []; POOR.bad = 0;
+    if (!cfg.calibrated) { cfg.calibrated = true; save(); }
+    const r = CAL.resolve; CAL.resolve = null; if (r) r();
+  }
+  $('calOk').addEventListener('click', closeCalib);
+  function calibTrack(e) {
+    if (e.alpha == null || e.beta == null || e.gamma == null) return;
+    if (CAL.active) {
+      const l = CAL.last;
+      if (l) {
+        const mv = Math.min(40, Math.abs(angDiff(e.alpha, l[0])) + Math.abs(e.beta - l[1]) + Math.abs(e.gamma - l[2]));
+        CAL.prog += mv;
+        const r = Math.min(1, CAL.prog / 900);
+        $('calBar').style.width = Math.round(r * 100) + '%';
+        if (r >= 1 && !$('calib').classList.contains('done')) { $('calib').classList.add('done'); $('calMsg').textContent = 'Calibration complete. Tap OK to continue.'; }
+      }
+      CAL.last = [e.alpha, e.beta, e.gamma];
+    }
+  }
+  // Poor readings: the heading jumps while the phone is held still, or iOS reports a low accuracy.
+  function poorCheck(h, e) {
+    const now = Date.now(), l = POOR.last; POOR.last = { h, b: e.beta, g: e.gamma };
+    if (typeof e.webkitCompassAccuracy === 'number' && (e.webkitCompassAccuracy < 0 || e.webkitCompassAccuracy > 30)) POOR.bad++; else POOR.bad = Math.max(0, POOR.bad - 1);
+    if (l && e.beta != null && Math.abs(e.beta - l.b) + Math.abs(e.gamma - l.g) < 1.5 && Math.abs(angDiff(h, l.h)) > 12) POOR.jumps.push(now);
+    POOR.jumps = POOR.jumps.filter(t => now - t < 20000);
+    POOR.flag = POOR.jumps.length >= 4 || POOR.bad >= 12;
+    if (POOR.flag && !CAL.active && cfg.onboarded && !S.demo && startupDone && now - CAL.shown > 10 * 60 * 1000 && $('gate').hidden) showCalib();
+  }
+  let startupDone = false;
   function onOrient(e) {
     if (S.manual && S.demo) return;
+    calibTrack(e);
     let h = null, p = null;
     if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
       h = e.webkitCompassHeading;
@@ -799,6 +1087,7 @@ function gpxToLocs(text) {
     if (p != null) S.pitch = cfg.facing === 'user' ? -p : p;
     if (h == null) return;
     if (cfg.facing === 'user') h += 180;
+    poorCheck(h, e);
     const wasManual = S.manual;
     if (wasManual) { S.manual = false; $('headRow').hidden = true; }   // real compass data arrived after the fallback
     pushHeading((h + cfg.offset + 720) % 360, wasManual);
@@ -849,7 +1138,17 @@ function gpxToLocs(text) {
   }
 
   // ---------------- camera & zoom ----------------
-  async function startCamera() {
+  let camGen = 0, camWanted = false;
+  function stopCamera() {
+    camGen++;
+    if (track) { try { track.stop(); } catch (e) {} track = null; }
+    const s = el.video.srcObject;
+    if (s && s.getTracks) s.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+    el.video.srcObject = null; S.torch = false; $('btnFlash').classList.remove('on');
+  }
+  async function startCamera(keepZoom) {
+    camWanted = true;
+    const gen = ++camGen, prevZoom = S.zoom;
     if (track) { try { track.stop(); } catch (e) {} track = null; }
     S.torch = false; $('btnFlash').classList.remove('on'); S.hw = false; zoomMin = 1; zoomMax = 10;
     el.zoomIn.min = 1; el.zoomIn.max = 10; el.zoomIn.step = 0.1;
@@ -858,20 +1157,43 @@ function gpxToLocs(text) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: cfg.facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+      if (gen !== camGen) { stream.getTracks().forEach(t => t.stop()); return; }   // a newer start (or a pause) replaced this one
       el.video.srcObject = stream; await el.video.play().catch(() => {});
       $('noCam').hidden = true; track = stream.getVideoTracks()[0];
+      const mine = track;
+      mine.addEventListener('ended', () => {   // another app took the camera, or the system stopped it
+        if (track === mine && camWanted && !document.hidden) { track = null; setSt('cam', 'wait', 'Restarting…'); setTimeout(() => startCamera(true), 600); }
+      });
       const caps = (track.getCapabilities && track.getCapabilities()) || {};
       if (caps.zoom && caps.zoom.max > caps.zoom.min) {
         S.hw = true; zoomMin = Math.max(1, caps.zoom.min); zoomMax = Math.min(caps.zoom.max, 10);
         el.zoomIn.min = zoomMin; el.zoomIn.max = zoomMax; el.zoomIn.step = caps.zoom.step || 0.1;
       }
-      setZoom(1);
+      setZoom(keepZoom ? prevZoom : 1);
       setSt('cam', 'ok', S.hw ? 'Active · optical zoom' : 'Active · digital zoom');
     } catch (e) {
+      if (gen !== camGen) return;
+      $('noCam').hidden = false;
       setSt('cam', 'err', e && e.name === 'NotAllowedError' ? 'Permission denied' : 'Could not open the camera');
-      toast('The camera could not be opened. Check the camera permission.');
+      toast('The camera could not be opened. Tap the picture to try again.');
     }
   }
+  // Leaving the app (multitasking, home, lock screen) releases the camera; coming back restarts it.
+  let appActive = true;
+  function setActive(on) {
+    if (on === appActive) return;
+    appActive = on;
+    if (!camWanted) return;
+    if (!on) { stopCamera(); setSt('cam', 'wait', 'Paused'); return; }
+    startCamera(true);
+    setTimeout(() => {   // second chance if the first restart did not produce a live picture
+      if (appActive && camWanted && (!track || track.readyState !== 'live' || el.video.readyState < 2)) startCamera(true);
+    }, 2500);
+  }
+  document.addEventListener('visibilitychange', () => setActive(!document.hidden));
+  document.addEventListener('resume', () => setActive(true)); document.addEventListener('pause', () => setActive(false));
+  if (IS_NATIVE && N.app && N.app.onState) N.app.onState(on => setActive(on));
+  $('noCam').addEventListener('click', () => { if (camWanted) startCamera(true); });
   el.video.addEventListener('loadedmetadata', touch);
   let zoomPending = false;
   function setZoom(z) {
@@ -956,8 +1278,9 @@ function gpxToLocs(text) {
       '<button class="btnwide' + (S.demo ? ' on' : '') + '" id="demoBtn">' + (S.demo ? 'Simulating sensors (tap to stop)' : 'Simulate sensors') + '</button>' +
       '<div class="card"><h3>How it works</h3><div class="how">' +
         '<p>The yellow cone on the map is the area the camera sees. It starts at your GPS position and opens in the direction the phone is pointing.</p>' +
-        '<p>Zooming in makes the cone narrower. The Range slider sets how far the cone reaches.</p>' +
-        '<p>If the cone is off by a few degrees, set Compass correction in Settings. Moving the phone in a figure 8 recalibrates the compass.</p></div></div>';
+        '<p>Zooming the camera in makes the cone narrower. The cone runs to the edge of the map at any map zoom; the marks along the center line show the distance.</p>' +
+        '<p>Names of cities, towns, villages and peaks come from OpenStreetMap and need an internet connection to load. Tap a name on the camera view to align the compass to it.</p>' +
+        '<p>If the cone is off by a few degrees, use Compass correction or Calibrate compass in Settings.</p></div></div>';
     p.scrollTop = top;
     $('demoBtn').addEventListener('click', () => setDemo(!S.demo));
     $('locBtn').addEventListener('click', needPro(() => openLocs()));
@@ -975,11 +1298,15 @@ function gpxToLocs(text) {
       { t: 'num', k: 'baseFov', label: 'Lens field of view', min: 30, max: 120, step: 1, unit: '°', hint: 'Field of view of the lens along the long side of the picture. Most phones are 65–75°.' },
       { t: 'num', k: 'offset', label: 'Compass correction', min: -180, max: 180, step: 1, unit: '°', hint: 'Added to the compass heading. Use it if the cone points a little off.' },
       { t: 'tog', k: 'crosshair', label: 'Show crosshair' },
-      { t: 'tog', k: 'camInfo', label: 'Show camera info' }] },
+      { t: 'tog', k: 'camInfo', label: 'Show camera info' },
+      { t: 'tog', k: 'poiCam', label: 'Show place names on camera' },
+      { t: 'act', label: 'Calibrate compass', run: () => { closeSettings(); setTimeout(showCalib, 250); } }] },
     { title: 'Map', icon: 'map', rows: [
       { t: 'pick', k: 'mapType', label: 'Map type', opts: Object.keys(TILES).map(k => [k, TILES[k].name]), after: setTiles },
       { t: 'tog', k: 'showFov', label: 'Show field of view (FOV)' },
       { t: 'tog', k: 'showDir', label: 'Show direction line' },
+      { t: 'tog', k: 'showTicks', label: 'Show distance marks' },
+      { t: 'tog', k: 'poiMap', label: 'Show place names on the map' },
       { t: 'tog', k: 'showPos', label: 'Show my position' }] },
     { title: 'Units', icon: 'ruler', rows: [
       { t: 'pick', k: 'distUnit', label: 'Distance', opts: [['km', 'Kilometers (km)'], ['mi', 'Miles (mi)']] },
@@ -998,6 +1325,7 @@ function gpxToLocs(text) {
         else if (r.t === 'pick') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val">' + (r.fmt ? r.fmt(v) : optLabel(r.opts, v)) + ic('chev') + '</span></button>';
         else if (r.t === 'num') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val">' + v + r.unit + ic('chev') + '</span></button>';
         else if (r.t === 'color') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val"><span class="swatch"></span></span></button>';
+        else if (r.t === 'act') h += '<button class="row" data-row="' + id + '"><span>' + r.label + '</span><span class="val">' + ic('chev') + '</span></button>';
       });
       h += '</section>';
     });
@@ -1010,6 +1338,7 @@ function gpxToLocs(text) {
         else if (r.t === 'pick') openPick(r);
         else if (r.t === 'num') openNum(r);
         else if (r.t === 'color') openColor(r);
+        else if (r.t === 'act') r.run();
       });
     });
   }
@@ -1305,6 +1634,7 @@ function gpxToLocs(text) {
   // ---- Android back button ----
   function handleBack() {
     if (!sheetBg.hidden) { closeSheet(); return; }
+    if (CAL.active) { closeCalib(); return; }
     if (!$('pro').hidden) { closePro(); return; }
     if (!$('locs').hidden) { closeLocs(); return; }
     if (!$('settings').hidden) { closeSettings(); return; }
@@ -1318,10 +1648,21 @@ function gpxToLocs(text) {
   // ---------------- start ----------------
   function go() { startCamera(); startGeo(); startOrientation(true); }
   async function openAd() {
-    if (!IS_NATIVE || !N.ads) return;
-    await Promise.race([billingReady, new Promise(r => setTimeout(r, 2500))]);
-    if (PRO.on) return;
+    if (!IS_NATIVE || !N.ads || PRO.on) return;
     try { await N.ads.showInterstitial(); } catch (e) {}
+  }
+  // Normal launch: check the compass for a moment (and wait for billing), calibrate first if it is poor, then show the ad.
+  async function startupFlow() {
+    const compass = new Promise(res => {
+      const t0 = Date.now(), iv = setInterval(() => {
+        if (POOR.flag) { clearInterval(iv); res(true); } else if (Date.now() - t0 > 1800) { clearInterval(iv); res(false); }
+      }, 150);
+    });
+    const billing = IS_NATIVE ? Promise.race([billingReady, new Promise(r => setTimeout(r, 2500))]) : Promise.resolve();
+    const [poor] = await Promise.all([compass, billing]);
+    if (poor) await showCalib();
+    startupDone = true;
+    await openAd();
   }
   async function begin() {
     const needMotion = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
@@ -1333,8 +1674,10 @@ function gpxToLocs(text) {
         if (needMotion) { ok = false; try { ok = (await DeviceOrientationEvent.requestPermission()) === 'granted'; } catch (e) {} }
         $('gate').hidden = true; cfg.onboarded = true; save();
         startCamera(); startGeo(); startOrientation(ok);
+        // First launch: calibrate the compass before the main screen is used (no ad on the first launch).
+        await showCalib(); startupDone = true;
       }, { once: true });
-    } else { go(); openAd(); }
+    } else { go(); startupFlow(); }
   }
   applyTheme(); applyLayout(); setTiles(); syncLocate(); applyProUi();
   initBilling();

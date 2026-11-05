@@ -115,7 +115,8 @@ window.AimNative = {
   ads: { showInterstitial },
   app: {
     onBack(cb) { App.addListener('backButton', () => cb()); },
-    exit() { App.exitApp(); }
+    exit() { App.exitApp(); },
+    onState(cb) { App.addListener('appStateChange', s => cb(!!s.isActive)); }
   },
   files
 };
