@@ -33,7 +33,7 @@ Map data © OpenStreetMap contributors.
 
 **Category:** Maps & Navigation (or Tools)
 **Tags:** maps, compass, camera, navigation
-**Contact email:** (your email)
+**Contact email:** nickar82@gmail.com
 **Privacy policy URL:** https://nickar82.github.io/AimMapPRO/privacy.html  (after enabling GitHub Pages, see below)
 
 ## In-app product
@@ -61,4 +61,4 @@ ID `aimmap_pro` · Name: AimMap Pro · Description: Removes ads and unlocks Save
 - Phone screenshots: take at least 2 real ones on your phone (main view in portrait and the map with the cone). Min 320 px, 16:9 or 9:16.
 
 ## Enable the privacy policy page
-GitHub → repo **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch `main`, folder `/docs` → Save**. After a minute the policy is at `https://nickar82.github.io/AimMapPRO/privacy.html`. Edit `docs/privacy.html` first and replace `[ADD YOUR CONTACT EMAIL HERE]`.
+GitHub → repo **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch `main`, folder `/docs` → Save**. After a minute the policy is at `https://nickar82.github.io/AimMapPRO/privacy.html`. Edit `docs/privacy.html` first and replace `nickar82@gmail.com`.
